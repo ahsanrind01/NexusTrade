@@ -1,0 +1,10 @@
+{
+  "out": "./drizzle",
+  "schema": "./src/db/schema.ts",
+  "dialect": "postgresql",
+  "dbCredentials": {
+    "url": "postgres://admin:secretpassword@localhost:5432/nexustrade_db"
+  },
+  "verbose": true,
+  "strict": true
+}

@@ -1,0 +1,9 @@
+{
+  "name": "ledger-service",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "db:push": "drizzle-kit push --config=drizzle.config.json",
+    "db:studio": "drizzle-kit studio --config=drizzle.config.json"
+  }
+}
