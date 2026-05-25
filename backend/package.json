@@ -1,16 +1,13 @@
 {
-  "name": "backend",
+  "name": "nexustrade-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "workspaces": [
+    "services/*"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "dev": "concurrently \"npm run dev -w order-service\" \"npm run dev -w ledger-service\""
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
