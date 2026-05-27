@@ -8,7 +8,7 @@ const kafka = new Kafka({
 });
 
 
-const consumer = kafka.consumer({ groupId: 'ledger-group' });
+const consumer = kafka.consumer({ groupId: 'ledger-group' }); 
 
 const run = async () => {
   await consumer.connect();
@@ -21,7 +21,7 @@ const run = async () => {
       if (!message.value) return;
 
       const order = JSON.parse(message.value.toString());
-      console.log(`🔨 Processing order ${order.orderId} for User ${order.userId}...`);
+      console.log(`Processing order ${order.orderId} for User ${order.userId}...`);
 
       try {
         await db.transaction(async (tx) => {
