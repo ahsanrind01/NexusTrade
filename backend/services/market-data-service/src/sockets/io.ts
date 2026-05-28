@@ -9,7 +9,7 @@ export const initSocket = (server: http.Server) => {
   });
 
   io.on('connection', (socket: Socket) => {
-    console.log(`🔌 Client connected to live feed: ${socket.id}`);
+    console.log(`Client connected to live feed: ${socket.id}`);
     
     socket.on('disconnect', () => {
       console.log(`Client disconnected: ${socket.id}`);

@@ -6,7 +6,7 @@ const redis = new Redis({
 });
 
 redis.on('connect', () => {
-  console.log('⚡ Redis Connected (Matching Engine)');
+  console.log(' Redis Connected (Matching Engine)');
 });
 
 redis.on('error', (err) => {

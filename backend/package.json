@@ -6,7 +6,7 @@
     "services/*"
   ],
   "scripts": {
-  "dev": "concurrently  \"npm run dev -w order-service\" \"npm run dev -w matching-engine\" \"npm run dev -w ledger-service\" \"npm run dev -w market-data-service\""  },
+  "dev": "concurrently  \"npm run dev -w order-service\" \"npm run dev -w matching-engine\" \"npm run dev -w ledger-service\" \"npm run dev -w market-data-service\" \"npm run dev -w wallet-service\""  },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",

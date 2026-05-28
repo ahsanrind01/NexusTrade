@@ -17,5 +17,5 @@ startGlobalPriceStream();
 
 const PORT = 3003;
 server.listen(PORT, () => {
-  console.log(`📡 Market Data WebSocket Server running on port ${PORT}`);
+  console.log(`Market Data WebSocket Server running on port ${PORT}`);
 });

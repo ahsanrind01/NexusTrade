@@ -17,7 +17,7 @@ export const startGlobalPriceStream = () => {
   const ws = new WebSocket(wsUrl);
 
   ws.on('open', () => {
-    console.log(`🌍 Connected to Binance Global Firehose (${TOP_20_PAIRS.length} pairs)`);
+    console.log(`Connected to Binance Global Firehose (${TOP_20_PAIRS.length} pairs)`);
   });
 
   ws.on('message', (data: WebSocket.Data) => {

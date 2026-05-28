@@ -12,7 +12,7 @@ const run = async () => {
       if (!message.value) return;
 
       const order = JSON.parse(message.value.toString());
-      console.log(`\n🔍 Matching Engine caught: ${order.side} ${order.amount} ${order.asset} @ $${order.price}`);
+      console.log(`\nMatching Engine caught: ${order.side} ${order.amount} ${order.asset} @ $${order.price}`);
       
       try {
         await processNewOrder(order);
