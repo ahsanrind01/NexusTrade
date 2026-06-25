@@ -13,7 +13,7 @@ export const createDepositIntent = async (req: Request, res: Response) => {
     const { asset, amount, type } = req.body;
     
 
-    const userId = req.headers['x-user-id'] as string || 'aedd8f05-c0d2-4b0d-a6e2-0468e240eb1e';
+    const userId = req.headers['x-user-id'] as string ;
 
     if (!asset || !amount || !type) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
@@ -127,7 +127,7 @@ export const createWithdrawalIntent = async (req: Request, res: Response) => {
     const { asset, amount, type, destinationAddress } = req.body;
     
 
-    const userId = req.headers['x-user-id'] as string || 'aedd8f05-c0d2-4b0d-a6e2-0468e240eb1e';
+    const userId = req.headers['x-user-id'] as string; 
 
     if (!asset || !amount || !type) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });

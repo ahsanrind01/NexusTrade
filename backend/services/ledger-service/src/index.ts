@@ -1,6 +1,6 @@
 import { Kafka } from 'kafkajs';
 import { db } from './db'; 
-import { transactions, ledgerEntries } from './db/schema';
+import { users, transactions, ledgerEntries } from './db/schema';
 import { eq, and, sum } from 'drizzle-orm'; 
 
 const kafka = new Kafka({
@@ -17,83 +17,101 @@ const run = async () => {
   console.log('Ledger Service connected to Kafka Consumer & Producer');
 
   await consumer.subscribe({ topic: 'completed-trades', fromBeginning: true });
+  await consumer.subscribe({ topic: 'user-created', fromBeginning: true });
 
   await consumer.run({
-    eachMessage: async ({ topic, partition, message }) => {
-      if (!message.value) return;
+  eachMessage: async ({ topic, partition, message }) => {
+    if (!message.value) return;
 
-      const tradeData = JSON.parse(message.value.toString());
-      console.log(`\nProcessing Trade Receipt ${tradeData.tradeId}...`);
+    const data = JSON.parse(message.value.toString());
 
-      try {
-        await db.transaction(async (tx) => {
-          
-          const [trade] = await tx.insert(transactions).values({
-            referenceId: tradeData.tradeId, 
-            type: 'TRADE',
-            status: 'COMPLETED',
-          }).returning();
+    if (topic === 'user-created') {
+      const { userId, email } = data;
+      await db.insert(users)
+        .values({ id: userId, email })
+        .onConflictDoNothing();
+      console.log(`\nLedger: Registered new user ${userId}`);
+      return; 
+    }
+      if (topic === 'completed-trades') {
+  console.log(`\nProcessing Trade Receipt ${data.tradeId}...`);
 
-          const userId = tradeData.takerUserId;
-          
-          await tx.insert(ledgerEntries).values([
-            {
-              transactionId: trade.id,
-              userId: userId,
-              asset: tradeData.asset,
-              amount: tradeData.amount.toString(),
-              direction: 'CREDIT', 
-            }
-          ]);
+  try {
+    await db.transaction(async (tx) => {
 
-          console.log(`Trade ${trade.id} safely locked in PostgreSQL!`);
+      const [trade] = await tx.insert(transactions).values({
+        referenceId: data.tradeId,
+        type: 'TRADE',
+        status: 'COMPLETED',
+      }).returning();
 
-          // THE STATE CALCULATION (CQRS) ---
-          
-          const [creditResult] = await tx
-            .select({ value: sum(ledgerEntries.amount) })
-            .from(ledgerEntries)
-            .where(and(
-              eq(ledgerEntries.userId, userId),
-              eq(ledgerEntries.asset, tradeData.asset),
-              eq(ledgerEntries.direction, 'CREDIT')
-            ));
+      const { takerUserId, makerUserId, asset, amount, takerSide } = data;
+      const takerDirection = takerSide === 'BUY' ? 'CREDIT' : 'DEBIT';
+      const makerDirection = takerSide === 'BUY' ? 'DEBIT' : 'CREDIT';
 
-          const [debitResult] = await tx
-            .select({ value: sum(ledgerEntries.amount) })
-            .from(ledgerEntries)
-            .where(and(
-              eq(ledgerEntries.userId, userId),
-              eq(ledgerEntries.asset, tradeData.asset),
-              eq(ledgerEntries.direction, 'DEBIT')
-            ));
+      await tx.insert(ledgerEntries).values([
+        {
+          transactionId: trade.id,
+          userId: takerUserId,
+          asset: asset,
+          amount: amount.toString(),
+          direction: takerDirection,
+        },
+        {
+          transactionId: trade.id,
+          userId: makerUserId,
+          asset: asset,
+          amount: amount.toString(),
+          direction: makerDirection,
+        }
+      ]);
 
-          const totalCredits = Number(creditResult?.value || 0);
-          const totalDebits = Number(debitResult?.value || 0);
-          const newBalance = totalCredits - totalDebits;
+      console.log(`Trade ${trade.id} locked. Taker(${takerUserId}) ${takerDirection}, Maker(${makerUserId}) ${makerDirection}`);
 
-          //  THE BROADCAST ---
-          
-          await producer.send({
-            topic: 'balance-updates',
-            messages: [{
-              value: JSON.stringify({
-                userId: userId,
-                asset: tradeData.asset,
-                newBalance: newBalance,
-                timestamp: new Date().toISOString()
-              }),
-            }],
-          });
-          
-          console.log(`Broadcasted updated balance to Wallet Service: ${newBalance} ${tradeData.asset}`);
+      for (const userId of [takerUserId, makerUserId]) {
+        const [creditResult] = await tx
+          .select({ value: sum(ledgerEntries.amount) })
+          .from(ledgerEntries)
+          .where(and(
+            eq(ledgerEntries.userId, userId),
+            eq(ledgerEntries.asset, asset),
+            eq(ledgerEntries.direction, 'CREDIT')
+          ));
+
+        const [debitResult] = await tx
+          .select({ value: sum(ledgerEntries.amount) })
+          .from(ledgerEntries)
+          .where(and(
+            eq(ledgerEntries.userId, userId),
+            eq(ledgerEntries.asset, asset),
+            eq(ledgerEntries.direction, 'DEBIT')
+          ));
+
+        const newBalance = Number(creditResult?.value || 0) - Number(debitResult?.value || 0);
+
+        await producer.send({
+          topic: 'balance-updates',
+          messages: [{
+            value: JSON.stringify({
+              userId,
+              asset,
+              newBalance,
+              timestamp: new Date().toISOString()
+            }),
+          }],
         });
 
-      } catch (error) {
-        console.error(`Failed to process trade:`, error);
+        console.log(`Balance broadcast: ${userId} → ${newBalance} ${asset}`);
       }
-    },
-  });
+    });
+
+  } catch (error) {
+    console.error(`Failed to process trade:`, error);
+  }
+}
+  },
+});
+
 };
 
 run().catch(console.error);
