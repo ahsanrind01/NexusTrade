@@ -1,8 +1,12 @@
 import express from 'express';
 import cors from 'cors';
+import dotenv from 'dotenv';
+dotenv.config();
+
 import walletRoutes from './routes/walletRoutes';
 import { startBalanceConsumer } from './services/balanceConsumer';
 import { startFundingConsumer } from './services/fundingConsumer';
+import { warmUpCache } from './cache/warmUpCache';
 
 const app = express();
 app.use(cors());
@@ -10,11 +14,14 @@ app.use(express.json());
 
 app.use('/api/wallet', walletRoutes);
 
-startBalanceConsumer().catch(console.error);
+const start = async () => {
+  await warmUpCache();           
+  await startBalanceConsumer();  
+  await startFundingConsumer();
 
-startFundingConsumer();
+  app.listen(3004, () => {
+    console.log('Wallet Query Service running on port 3004');
+  });
+};
 
-const PORT = 3004;
-app.listen(PORT, () => {
-  console.log(`Wallet Query Service running on port ${PORT}`);
-});
+start().catch(console.error);
