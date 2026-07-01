@@ -6,7 +6,11 @@ const TOP_20_PAIRS = [
   'btcusdt', 'ethusdt', 'bnbusdt', 'solusdt', 'xrpusdt',
   'adausdt', 'dogeusdt', 'avaxusdt', 'dotusdt', 'linkusdt',
   'maticusdt', 'uniusdt', 'ltcusdt', 'bchusdt', 'shibusdt',
-  'nearusdt', 'apetusdt', 'filusdt', 'rndrusdt', 'aptusdt'
+  'nearusdt', 'aptusdt', 'filusdt', 'rndrusdt', 'apetusdt',
+  'atomusdt', 'vetusdt', 'xlmusdt', 'trxusdt', 'etcusdt',
+  'icpusdt', 'hbarusdt', 'algousdt', 'egldusdt', 'xtzusdt',
+  'aaveusdt', 'sandusdt', 'manausdt', 'axsusdt', 'grtusdt',
+  'ftmusdt', 'runeusdt', 'injusdt', 'opusdt', 'arbusdt'
 ];
 
 export const startGlobalPriceStream = () => {

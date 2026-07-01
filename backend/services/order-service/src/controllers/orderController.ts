@@ -4,6 +4,8 @@ import { GatewayRequest } from '../../../../shared';
 import { db } from '../db';
 import { orders } from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
+import { trades } from '../db/schema'; 
+
 
 export const placeOrder = async (req: GatewayRequest, res: Response) => {
   try {
@@ -60,4 +62,10 @@ export const getMyOrders = async (req: GatewayRequest, res: Response) => {
     console.error('Get orders error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
+};
+
+export const getMyTrades = async (req: GatewayRequest, res: Response) => {
+  const userId = req.userId;
+  const userTrades = await db.select().from(trades).where(eq(trades.userId, userId!)).orderBy(desc(trades.createdAt));
+  res.json({ success: true, trades: userTrades });
 };

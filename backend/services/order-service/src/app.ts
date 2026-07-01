@@ -1,6 +1,7 @@
 import express from 'express';
 import orderRoutes from './routes/orderRoutes.ts';
 import { connectProducer } from './kafka/client'; 
+import { startOrderConsumer } from './kafka/consumer'; 
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,8 +13,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'Order Service is healthy' });
 });
 
-connectProducer().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Order Service running on http://localhost:${PORT}`);
-  });
+connectProducer().then(async () => {
+  await startOrderConsumer(); 
+  app.listen(PORT, () => console.log(`Order Service running on port ${PORT}`));
 });
