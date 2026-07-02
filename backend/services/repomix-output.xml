@@ -1,0 +1,2694 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+ai-bot-service/
+  src/
+    index.ts
+api-gateway/
+  src/
+    middleware/
+      authenticate.ts
+    routes/
+      index.ts
+    index.ts
+  package.json
+  tsconfig.json
+auth-service/
+  src/
+    config/
+      db.ts
+      kafka.ts
+    controllers/
+      authController.ts
+    db/
+      schema.ts
+    middleware/
+      authenticate.ts
+    routes/
+      authRoutes.ts
+    index.ts
+  create-db.ts
+  drizzle.config.ts
+  package.json
+  tsconfig.json
+funding-service/
+  src/
+    config/
+      db.ts
+      kafka.ts
+    controllers/
+      fundingController.ts
+      webhookController.ts
+    db/
+      schema.ts
+    middleware/
+      trustgateway.ts
+    routes/
+      fundingRoutes.ts
+    workers/
+      withdrawalConsumer.ts
+    index.ts
+  drizzle.config.json
+  package.json
+  tsconfig.json
+ledger-service/
+  src/
+    db/
+      index.ts
+      schema.ts
+    index.ts
+  drizzle.config.json
+  package.json
+market-data-service/
+  src/
+    config/
+      kafka.ts
+      redis.ts
+    services/
+      globalPriceStream.ts
+      marketConsumer.ts
+    sockets/
+      io.ts
+    index.ts
+  package.json
+matching-engine/
+  src/
+    config/
+      kafka.ts
+      redis.ts
+    repositories/
+      orderBookRepo.ts
+    services/
+      matchingService.ts
+    index.ts
+  package.json
+order-service/
+  drizzle/
+    meta/
+      _journal.json
+      0000_snapshot.json
+    0000_careful_mole_man.sql
+  src/
+    controllers/
+      orderController.ts
+    db/
+      index.ts
+      schema.ts
+    kafka/
+      client.ts
+      consumer.ts
+    middleware/
+      trustgateway.ts
+    routes/
+      orderRoutes.ts
+    app.ts
+  drizzle.config.ts
+  package.json
+wallet-service/
+  src/
+    cache/
+      warmUpCache.ts
+    config/
+      kafka.ts
+      ledgerDb.ts
+      redis.ts
+    controllers/
+      walletController.ts
+    middleware/
+      trustgateway.ts
+    routes/
+      walletRoutes.ts
+    services/
+      balanceConsumer.ts
+      fundingConsumer.ts
+    index.ts
+  package.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="ai-bot-service/src/index.ts">
+
+</file>
+
+<file path="api-gateway/src/middleware/authenticate.ts">
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secure_jwt_secret_key_here';
+
+export interface AuthRequest extends Request {
+  userId?: string;
+  userEmail?: string;
+}
+
+export const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Missing or invalid token' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string };
+    req.userId = decoded.userId;
+    req.userEmail = decoded.email;
+    return next();
+  } catch {
+    return res.status(401).json({ success: false, error: 'Token expired or invalid' });
+  }
+};
+</file>
+
+<file path="api-gateway/src/routes/index.ts">
+import { Router, Request, Response, NextFunction } from 'express';
+import { createProxyMiddleware } from 'http-proxy-middleware';
+import { authenticate, AuthRequest } from '../middleware/authenticate';
+
+const router = Router();
+
+const injectUser = (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (req.userId) {
+    req.headers['x-user-id'] = req.userId;
+    req.headers['x-user-email'] = req.userEmail || '';
+  }
+  next();
+};
+
+const authProxy = createProxyMiddleware({
+  target: 'http://localhost:3007',
+  changeOrigin: true,
+});
+
+router.use('/auth', (req: Request, res: Response, next: NextFunction) => {
+  req.url = '/api/auth' + req.url;
+  authProxy(req, res, next);
+});
+
+const ordersProxy = createProxyMiddleware({
+  target: 'http://localhost:3001',
+  changeOrigin: true,
+});
+
+router.use(
+  '/orders',
+  authenticate,
+  injectUser,
+  (req: AuthRequest, res: Response, next: NextFunction) => {
+    req.url = '/api/orders' + req.url;
+    ordersProxy(req, res, next);
+  }
+);
+
+const walletProxy = createProxyMiddleware({
+  target: 'http://localhost:3004',
+  changeOrigin: true,
+});
+
+router.use(
+  '/wallet',
+  authenticate,
+  injectUser,
+  (req: AuthRequest, res: Response, next: NextFunction) => {
+    req.url = '/api/wallet' + req.url;
+    walletProxy(req, res, next);
+  }
+);
+
+const fundingProxy = createProxyMiddleware({
+  target: 'http://localhost:3005',
+  changeOrigin: true,
+});
+
+router.use(
+  '/funding',
+  authenticate,
+  injectUser,
+  (req: AuthRequest, res: Response, next: NextFunction) => {
+    req.url = '/api/funding' + req.url;
+    fundingProxy(req, res, next);
+  }
+);
+
+router.get('/health', (req: Request, res: Response) => {
+  res.status(200).json({ status: 'API Gateway is healthy' });
+});
+
+export default router;
+</file>
+
+<file path="api-gateway/src/index.ts">
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import routes from './routes/index';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+
+app.use('/api', routes);
+
+app.listen(PORT, () => {
+  console.log(`API Gateway running on http://localhost:${PORT}`);
+});
+</file>
+
+<file path="api-gateway/package.json">
+{
+  "name": "api-gateway",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^3.0.3",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^20.12.7",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
+  }
+}
+</file>
+
+<file path="api-gateway/tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*"]
+}
+</file>
+
+<file path="auth-service/src/config/db.ts">
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+export const db = drizzle(pool);
+
+export const initDB = async () => {
+  try {
+    await pool.query('SELECT 1');
+    console.log('[Auth Service] Dedicated PostgreSQL Pool Initialized');
+  } catch (error) {
+    console.error('[Auth Service] Database connection failed:', error);
+    process.exit(1);
+  }
+};
+</file>
+
+<file path="auth-service/src/config/kafka.ts">
+import { Kafka } from 'kafkajs';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const kafka = new Kafka({
+  clientId: 'auth-service',
+  brokers: [process.env.KAFKA_BROKER || 'localhost:9092'],
+});
+
+const producer = kafka.producer();
+
+export const connectAuthProducer = async () => {
+  try {
+    await producer.connect();
+    console.log('[Auth Service] Kafka Producer connected successfully');
+  } catch (error) {
+    console.error('[Auth Service] Kafka Producer connection failed:', error);
+  }
+};
+
+export const emitUserCreatedEvent = async (userId: string, email: string, name: string) => {
+  try {
+    await producer.send({
+      topic: 'user-created',
+      messages: [
+        {
+          value: JSON.stringify({ userId, email, name, timestamp: new Date() }),
+        },
+      ],
+    });
+    console.log(`[Auth Kafka] Emitted 'user-created' for User ID: ${userId}`);
+  } catch (error) {
+    console.error('[Auth Kafka] Failed to emit user event:', error);
+  }
+};
+</file>
+
+<file path="auth-service/src/controllers/authController.ts">
+import { Request, Response } from 'express';
+import { db } from '../config/db';
+import { users } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import { emitUserCreatedEvent } from '../config/kafka';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secure_jwt_secret_key_here';
+
+export const signup = async (req: Request, res: Response) => {
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    const [existingUser] = await db.select().from(users).where(eq(users.email, email));
+    if (existingUser) {
+      return res.status(400).json({ success: false, error: 'Email already registered' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const [newUser] = await db.insert(users).values({
+      name,
+      email: email.toLowerCase(),
+      passwordHash,
+    }).returning();
+
+    await emitUserCreatedEvent(newUser.id, newUser.email, newUser.name);
+
+    const token = jwt.sign({ userId: newUser.id, email: newUser.email }, JWT_SECRET, { expiresIn: '24h' });
+
+    return res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      token,
+      user: { id: newUser.id, name: newUser.name, email: newUser.email },
+    });
+  } catch (error) {
+    console.error('Signup Error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+export const login = async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+
+    return res.status(200).json({
+      success: true,
+      token,
+      user: { id: user.id, name: user.name, email: user.email },
+    });
+  } catch (error) {
+    console.error('Login Error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+export const getProfile = async (req: Request, res: Response) => {
+  try {
+    const userId = req.params.userId;
+
+    const [user] = await db.select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      createdAt: users.createdAt,
+    }).from(users).where(eq(users.id, userId));
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    return res.status(200).json({ success: true, user });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+export const updateProfile = async (req: Request, res: Response) => {
+  try {
+    const userId = req.params.userId;
+    const { name, email } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'User ID is required' });
+    }
+
+    const [updatedUser] = await db.update(users)
+      .set({
+        name: name || undefined,
+        email: email ? email.toLowerCase() : undefined,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId))
+      .returning();
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: { id: updatedUser.id, name: updatedUser.name, email: updatedUser.email },
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+</file>
+
+<file path="auth-service/src/db/schema.ts">
+import { pgTable, uuid, varchar, timestamp } from 'drizzle-orm/pg-core';
+
+export const users = pgTable('users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  passwordHash: varchar('password_hash', { length: 255 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+</file>
+
+<file path="auth-service/src/middleware/authenticate.ts">
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
+
+export interface AuthRequest extends Request {
+  userId?: string;
+  email?: string;
+}
+
+export const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Missing or invalid token' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string };
+    req.userId = decoded.userId;
+    req.email = decoded.email;
+    return next();
+  } catch {
+    return res.status(401).json({ success: false, error: 'Token expired or invalid' });
+  }
+};
+</file>
+
+<file path="auth-service/src/routes/authRoutes.ts">
+import { Router } from 'express';
+import { signup, login, getProfile, updateProfile } from '../controllers/authController';
+import { authenticate } from '../middleware/authenticate';
+
+const router = Router();
+
+router.post('/signup', signup);
+router.post('/login', login);
+router.get('/profile/:userId', authenticate, getProfile);
+router.put('/profile/:userId', authenticate, updateProfile);
+
+export default router;
+</file>
+
+<file path="auth-service/src/index.ts">
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { initDB } from './config/db';
+import { connectAuthProducer } from './config/kafka';
+import authRoutes from './routes/authRoutes';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 3006;
+
+app.use(cors());
+app.use(express.json());
+
+app.use('/api/auth', authRoutes);
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'Auth Service is healthy' });
+});
+
+const start = async () => {
+  await initDB();
+  await connectAuthProducer();
+  app.listen(PORT, () => {
+    console.log(`Auth Service running on http://localhost:${PORT}`);
+  });
+};
+
+start().catch(console.error);
+</file>
+
+<file path="auth-service/create-db.ts">
+import pg from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const DB_NAME = 'nexustrade_auth_db';
+
+const run = async () => {
+  const client = new pg.Client({
+    host: process.env.DB_HOST || 'localhost',
+    port: Number(process.env.DB_PORT) || 5432,
+    user: process.env.DB_USER || 'admin',
+    password: process.env.DB_PASSWORD || 'secretpassword',
+    database: 'postgres',
+  });
+
+  try {
+    await client.connect();
+
+    const result = await client.query(
+      `SELECT 1 FROM pg_database WHERE datname = $1`,
+      [DB_NAME]
+    );
+
+    if (result.rowCount === 0) {
+      await client.query(`CREATE DATABASE ${DB_NAME}`);
+      console.log(`Database '${DB_NAME}' created.`);
+    } else {
+      console.log(`Database '${DB_NAME}' already exists.`);
+    }
+  } catch (error) {
+    console.error('Failed to create database:', error);
+    process.exit(1);
+  } finally {
+    await client.end();
+  }
+};
+
+run();
+</file>
+
+<file path="auth-service/drizzle.config.ts">
+import { defineConfig } from 'drizzle-kit';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export default defineConfig({
+  schema: './src/db/schema.ts',
+  out: './src/db/migrations',
+  dialect: 'postgresql',
+  dbCredentials: {
+    url: process.env.DATABASE_URL || '',
+  },
+});
+</file>
+
+<file path="auth-service/package.json">
+{
+  "name": "auth-service",
+  "version": "1.0.0",
+  "description": "NexusTrade Authentication Service",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:create": "tsx create-db.ts",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.30.10",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^20.12.7",
+    "@types/pg": "^8.11.5",
+    "drizzle-kit": "^0.21.4",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
+  }
+}
+</file>
+
+<file path="auth-service/tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "./dist",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "create-db.ts"]
+}
+</file>
+
+<file path="funding-service/src/config/db.ts">
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import * as schema from '../db/schema';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error('DATABASE_URL missing from environment variables');
+}
+
+const queryClient = postgres(connectionString);
+
+export const db = drizzle(queryClient, { schema });
+console.log('⚡ [Funding Service] PostgreSQL Connection Pool Initialized via Drizzle');
+</file>
+
+<file path="funding-service/src/config/kafka.ts">
+import { Kafka, Producer, logLevel } from 'kafkajs';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const kafkaBroker = process.env.KAFKA_BROKER || 'localhost:9092';
+
+process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
+
+const kafka = new Kafka({
+  clientId: 'funding-service',
+  brokers: [kafkaBroker],
+  logLevel: logLevel.WARN, 
+});
+
+let producer: Producer | null = null;
+
+export const getKafkaProducer = async (): Promise<Producer> => {
+  if (producer) return producer;
+
+  producer = kafka.producer();
+  await producer.connect();
+  console.log('⚡ [Funding Service] Kafka Producer connected successfully');
+  return producer;
+};
+
+export const disconnectKafka = async (): Promise<void> => {
+  if (producer) {
+    await producer.disconnect();
+    console.log('🔌 [Funding Service] Kafka Producer disconnected');
+  }
+};
+</file>
+
+<file path="funding-service/src/controllers/fundingController.ts">
+import { Request, Response } from 'express';
+import { db } from '../config/db';
+import { fundingTransactions } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import { v4 as uuidv4 } from 'uuid';
+import { getKafkaProducer } from '../config/kafka';
+
+
+//THE INTENT (PENDING)
+
+export const createDepositIntent = async (req: Request, res: Response) => {
+  try {
+    const { asset, amount, type } = req.body;
+    
+
+    const userId = req.headers['x-user-id'] as string ;
+
+    if (!asset || !amount || !type) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    let externalTxId = null;
+    let cryptoAddress = null;
+
+    if (type === 'FIAT_STRIPE') {
+      externalTxId = `cs_test_${uuidv4()}`; 
+    } else if (type === 'CRYPTO_ETH') {
+      cryptoAddress = '0xMockDepositWalletAddressForUserEth' + uuidv4().substring(0, 6);
+    }
+
+    const [newTx] = await db.insert(fundingTransactions).values({
+      userId,
+      direction: 'DEPOSIT',
+      type,
+      asset: asset.toLowerCase(),
+      amount,
+      externalTxId,
+      cryptoAddress,
+      status: 'PENDING'
+    }).returning();
+
+    console.log(`[Funding Service] Intent Saved: ${newTx.id} | Status: PENDING`);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Deposit intent created successfully',
+      transaction: {
+        id: newTx.id,
+        status: newTx.status,
+        type: newTx.type,
+        amount: newTx.amount,
+        asset: newTx.asset,
+        stripeCheckoutUrl: type === 'FIAT_STRIPE' ? `https://checkout.stripe.com/pay/${externalTxId}` : null,
+        cryptoDepositAddress: cryptoAddress
+      }
+    });
+
+  } catch (error) {
+    console.error('Error creating deposit intent:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+// CRYPTO CONFIRMATION
+
+export const simulateCryptoDeposit = async (req: Request, res: Response) => {
+  try {
+    const { transactionId } = req.body;
+
+    console.log(`[Crypto Simulation] Processing block confirmations for: ${transactionId}`);
+
+    const [transaction] = await db.select()
+      .from(fundingTransactions)
+      .where(eq(fundingTransactions.id, transactionId));
+
+    if (!transaction || transaction.type !== 'CRYPTO_ETH') {
+      return res.status(404).json({ success: false, error: 'Pending crypto transaction not found' });
+    }
+
+    if (transaction.status === 'COMPLETED') {
+      return res.status(400).json({ success: false, error: 'Transaction already completed' });
+    }
+
+    await db.update(fundingTransactions)
+      .set({ 
+        status: 'COMPLETED',
+        updatedAt: new Date()
+      })
+      .where(eq(fundingTransactions.id, transactionId));
+
+    console.log(`[Crypto Simulation] 12 Confirmations met. Transaction updated.`);
+
+    const producer = await getKafkaProducer();
+    const kafkaPayload = {
+      eventId: `crypto-dep-${transaction.id}`,
+      type: 'DEPOSIT_CLEARED',
+      userId: transaction.userId,
+      asset: transaction.asset,
+      amount: transaction.amount,
+      method: 'CRYPTO_ETH',
+      timestamp: new Date().toISOString()
+    };
+
+    await producer.send({
+      topic: 'deposit-cleared',
+      messages: [{ value: JSON.stringify(kafkaPayload) }],
+    });
+
+    console.log(`[Crypto Simulation] Event emitted to Kafka topic: deposit-cleared`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Crypto deposit simulation complete. Wallet will update.',
+      status: 'COMPLETED'
+    });
+
+  } catch (error) {
+    console.error('Crypto simulation failure:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+//  WITHDRAWAL INTENT
+
+export const createWithdrawalIntent = async (req: Request, res: Response) => {
+  try {
+    const { asset, amount, type, destinationAddress } = req.body;
+    
+
+    const userId = req.headers['x-user-id'] as string; 
+
+    if (!asset || !amount || !type) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    if (type === 'CRYPTO_ETH' && !destinationAddress) {
+      return res.status(400).json({ success: false, error: 'Crypto withdrawals require a destinationAddress' });
+    }
+
+    // intent as PENDING 
+    const [newTx] = await db.insert(fundingTransactions).values({
+      userId,
+      direction: 'WITHDRAWAL',
+      type,
+      asset: asset.toLowerCase(),
+      amount,
+      cryptoAddress: destinationAddress || null, 
+      status: 'PENDING'
+    }).returning();
+
+    console.log(`[Funding Service] Withdrawal Intent Saved: ${newTx.id} | Status: PENDING`);
+
+    const producer = await getKafkaProducer();
+    
+    const kafkaPayload = {
+      eventId: `withdraw-req-${newTx.id}`,
+      transactionId: newTx.id,
+      userId,
+      asset: newTx.asset,
+      amount: newTx.amount,
+      type: newTx.type,
+      destination: destinationAddress,
+      timestamp: new Date().toISOString()
+    };
+
+    await producer.send({
+      topic: 'withdrawal-requested',
+      messages: [{ value: JSON.stringify(kafkaPayload) }],
+    });
+
+    console.log(`[Funding Service] Emitted 'withdrawal-requested' to Kafka`);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Withdrawal requested. Awaiting wallet validation.',
+      transaction: {
+        id: newTx.id,
+        status: newTx.status,
+        direction: newTx.direction,
+        amount: newTx.amount,
+        asset: newTx.asset,
+      }
+    });
+
+  } catch (error) {
+    console.error('Error creating withdrawal intent:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+</file>
+
+<file path="funding-service/src/controllers/webhookController.ts">
+import { Request, Response } from 'express';
+import { db } from '../config/db';
+import { fundingTransactions } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import { getKafkaProducer } from '../config/kafka';
+
+export const handleStripeWebhook = async (req: Request, res: Response) => {
+  try {
+    // In production, you MUST verify the Stripe cryptographic signature here using the raw body.
+    // For local development, we will parse the JSON directly.
+    const event = req.body;
+
+    // We only care when a checkout session is successfully paid
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      const externalTxId = session.id; // This matches the cs_test_... ID we generated
+
+      console.log(`[Funding Webhook] Catching successful payment for: ${externalTxId}`);
+
+      // 1. Update the database record from PENDING to COMPLETED
+      const [updatedTx] = await db.update(fundingTransactions)
+        .set({ 
+            status: 'COMPLETED',
+            updatedAt: new Date()
+        })
+        .where(eq(fundingTransactions.externalTxId, externalTxId))
+        .returning();
+
+      if (!updatedTx) {
+         console.error(`[Funding Webhook] Transaction ${externalTxId} not found in database.`);
+         return res.status(404).send('Transaction not found');
+      }
+
+      console.log(`[Funding Webhook] DB Updated. Transaction ${updatedTx.id} is now COMPLETED.`);
+
+      // 2. Broadcast to the Kafka Cluster so the Ledger & Wallet update
+      const producer = await getKafkaProducer();
+      
+      const kafkaPayload = {
+        eventId: `fiat-dep-${updatedTx.id}`,
+        type: 'DEPOSIT_CLEARED',
+        userId: updatedTx.userId,
+        asset: updatedTx.asset,
+        amount: updatedTx.amount,
+        method: updatedTx.type,
+        timestamp: new Date().toISOString()
+      };
+
+      await producer.send({
+        topic: 'deposit-cleared',
+        messages: [{ value: JSON.stringify(kafkaPayload) }],
+      });
+
+      console.log(`[Funding Webhook] 🚀 Kafka Event Emitted: deposit-cleared`);
+    }
+
+    // Always return a 200 OK to Stripe quickly so they don't retry the webhook
+    return res.status(200).json({ received: true });
+
+  } catch (error) {
+    console.error('[Funding Webhook] Error processing webhook:', error);
+    return res.status(500).send('Webhook Error');
+  }
+};
+</file>
+
+<file path="funding-service/src/db/schema.ts">
+import { pgTable, uuid, varchar, numeric, timestamp, pgEnum } from 'drizzle-orm/pg-core';
+
+export const fundingStatusEnum = pgEnum('funding_status', ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED']);
+export const fundingTypeEnum = pgEnum('funding_type', ['FIAT_STRIPE', 'CRYPTO_ETH']);
+export const transactionDirectionEnum = pgEnum('tx_direction', ['DEPOSIT', 'WITHDRAWAL']);
+
+export const fundingTransactions = pgTable('funding_transactions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull(),
+  direction: transactionDirectionEnum('direction').notNull(),
+  type: fundingTypeEnum('type').notNull(),
+  asset: varchar('asset', { length: 10 }).notNull(), 
+  amount: numeric('amount', { precision: 18, scale: 8 }).notNull(),
+  
+  externalTxId: varchar('external_tx_id'), 
+  cryptoAddress: varchar('crypto_address'), 
+  
+  status: fundingStatusEnum('status').default('PENDING').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+</file>
+
+<file path="funding-service/src/middleware/trustgateway.ts">
+import { Request, Response, NextFunction } from 'express';
+
+export interface GatewayRequest extends Request {
+  userId?: string;
+  userEmail?: string;
+}
+
+export const trustGateway = (req: GatewayRequest, res: Response, next: NextFunction) => {
+  const userId = req.headers['x-user-id'] as string;
+  const userEmail = req.headers['x-user-email'] as string;
+
+  if (!userId) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  req.userId = userId;
+  req.userEmail = userEmail;
+  return next();
+};
+</file>
+
+<file path="funding-service/src/routes/fundingRoutes.ts">
+import { Router } from 'express';
+import { createDepositIntent, simulateCryptoDeposit, createWithdrawalIntent } from '../controllers/fundingController';
+import { handleStripeWebhook } from '../controllers/webhookController';
+import { trustGateway } from '../middleware/trustgateway';
+
+const router = Router();
+
+router.post('/deposit/intent', trustGateway, createDepositIntent);
+router.post('/deposit/simulate-crypto', trustGateway, simulateCryptoDeposit);
+router.post('/withdraw/intent', trustGateway, createWithdrawalIntent);
+router.post('/stripe-webhook', handleStripeWebhook);
+
+export default router;
+</file>
+
+<file path="funding-service/src/workers/withdrawalConsumer.ts">
+import { Kafka } from 'kafkajs';
+import { db } from '../config/db';
+import { fundingTransactions } from '../db/schema';
+import { eq } from 'drizzle-orm';
+
+const kafka = new Kafka({
+  clientId: 'funding-service',
+  brokers: [process.env.KAFKA_BROKER || 'localhost:9092'],
+});
+
+const consumer = kafka.consumer({ groupId: 'funding-withdrawal-group' });
+
+export const startWithdrawalConsumer = async () => {
+  try {
+    await consumer.connect();
+    
+    await consumer.subscribe({ topic: 'withdrawal-validated', fromBeginning: true });
+    await consumer.subscribe({ topic: 'withdrawal-rejected', fromBeginning: true });
+
+    console.log('[Funding Service] Listening for wallet validations...');
+
+    await consumer.run({
+      eachMessage: async ({ topic, message }) => {
+        if (!message.value) return;
+        const event = JSON.parse(message.value.toString());
+
+        const { transactionId, amount, asset, reason } = event;
+
+        // WALLET APPROVED THE WITHDRAWAL
+
+        if (topic === 'withdrawal-validated') {
+          console.log(`[Funding] Withdrawal ${transactionId} APPROVED by Wallet. Processing external transfer for ${amount} ${asset}...`);
+
+          // IN PRODUCTION: 
+          //  Stripe Payout API 
+          // ethers.js to send ETH to the user's destinationAddress.
+
+          await db.update(fundingTransactions)
+            .set({ 
+              status: 'COMPLETED', 
+              updatedAt: new Date() 
+            })
+            .where(eq(fundingTransactions.id, transactionId));
+
+          console.log(`[Funding] Funds sent! Transaction ${transactionId} marked as COMPLETED.`);
+        }
+
+
+        //  WALLET REJECTED THE WITHDRAWAL
+ 
+        if (topic === 'withdrawal-rejected') {
+          console.log(`[Funding] Withdrawal ${transactionId} REJECTED by Wallet. Reason: ${reason}`);
+
+          await db.update(fundingTransactions)
+            .set({ 
+              status: 'FAILED', 
+              updatedAt: new Date() 
+            })
+            .where(eq(fundingTransactions.id, transactionId));
+
+          console.log(`[Funding] Transaction ${transactionId} marked as FAILED.`);
+        }
+      },
+    });
+  } catch (error) {
+    console.error('[Funding Consumer] Error running Kafka consumer:', error);
+  }
+};
+</file>
+
+<file path="funding-service/src/index.ts">
+import express from 'express';
+import dotenv from 'dotenv';
+import fundingRoutes from './routes/fundingRoutes';
+import { startWithdrawalConsumer } from './workers/withdrawalConsumer';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 3005;
+
+app.use(express.json());
+
+app.use('/api/funding', fundingRoutes);
+
+startWithdrawalConsumer();
+
+app.listen(PORT, () => {
+  console.log(`Funding Service running on http://localhost:${PORT}`);
+});
+</file>
+
+<file path="funding-service/drizzle.config.json">
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "drizzle.config.ts"] 
+}
+</file>
+
+<file path="funding-service/package.json">
+{
+  "name": "funding-service",
+  "version": "1.0.0",
+  "description": "NexusTrade Funding and Liquidity Management Service",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.30.10",
+    "express": "^4.19.2",
+    "kafkajs": "^2.2.4",
+    "postgres": "^3.4.4",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.7",
+    "@types/uuid": "^9.0.8",
+    "drizzle-kit": "^0.21.4",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
+  }
+}
+</file>
+
+<file path="funding-service/tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"]
+}
+</file>
+
+<file path="ledger-service/src/db/schema.ts">
+import { pgTable, uuid, varchar, numeric, timestamp, check } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+
+export const users = pgTable('users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+
+export const transactions = pgTable('transactions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  referenceId: varchar('reference_id', { length: 255 }).notNull().unique(), 
+  type: varchar('type', { length: 50 }).notNull(),
+  status: varchar('status', { length: 50 }).default('PENDING').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const ledgerEntries = pgTable('ledger_entries', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  transactionId: uuid('transaction_id').references(() => transactions.id).notNull(),
+  userId: uuid('user_id').references(() => users.id).notNull(),
+  asset: varchar('asset', { length: 10 }).notNull(), 
+  
+  amount: numeric('amount', { precision: 18, scale: 8 }).notNull(), 
+  
+  direction: varchar('direction', { length: 10 }).notNull(), 
+  
+  createdAt: timestamp('created_at').defaultNow(),
+});
+</file>
+
+<file path="ledger-service/src/index.ts">
+import { Kafka } from 'kafkajs';
+import { db } from './db'; 
+import { users, transactions, ledgerEntries } from './db/schema';
+import { eq, and, sum } from 'drizzle-orm'; 
+
+const kafka = new Kafka({
+  clientId: 'ledger-service',
+  brokers: ['localhost:9092']
+});
+
+const consumer = kafka.consumer({ groupId: 'ledger-group' }); 
+const producer = kafka.producer(); 
+
+const run = async () => {
+  await consumer.connect();
+  await producer.connect(); 
+  console.log('Ledger Service connected to Kafka Consumer & Producer');
+
+  await consumer.subscribe({ topic: 'completed-trades', fromBeginning: true });
+  await consumer.subscribe({ topic: 'user-created', fromBeginning: true });
+  await consumer.subscribe({ topic: 'deposit-cleared', fromBeginning: true });
+
+  await consumer.run({
+    eachMessage: async ({ topic, partition, message }) => {
+      if (!message.value) return;
+      const data = JSON.parse(message.value.toString());
+
+      if (topic === 'user-created') {
+        const { userId, email } = data;
+        await db.insert(users)
+          .values({ id: userId, email })
+          .onConflictDoNothing();
+        console.log(`\nLedger: Registered new user ${userId}`);
+        return; 
+      }
+
+      if (topic === 'deposit-cleared') {
+        const { userId, asset, amount, eventId } = data;
+        console.log(`\nLedger: Recording deposit ${eventId} for ${userId}...`);
+        try {
+          await db.transaction(async (tx) => {
+            const [txRecord] = await tx.insert(transactions).values({
+              referenceId: eventId,
+              type: 'DEPOSIT',
+              status: 'COMPLETED',
+            }).returning();
+            await tx.insert(ledgerEntries).values({
+              transactionId: txRecord.id,
+              userId: userId,
+              asset: asset.toUpperCase(),
+              amount: amount.toString(),
+              direction: 'CREDIT',
+            });
+            console.log(`Ledger: Deposit ${eventId} recorded — CREDIT ${amount} ${asset} for ${userId}`);
+          });
+        } catch (error) {
+          console.error(`Ledger: Failed to record deposit:`, error);
+        }
+        return;
+      }
+
+      if (topic === 'completed-trades') {
+        console.log(`\nProcessing Trade Receipt ${data.tradeId}...`);
+        try {
+          await db.transaction(async (tx) => {
+            const [trade] = await tx.insert(transactions).values({
+              referenceId: data.tradeId,
+              type: 'TRADE',
+              status: 'COMPLETED',
+            }).returning();
+            const { takerUserId, makerUserId, asset, amount, takerSide } = data;
+            const takerDirection = takerSide === 'BUY' ? 'CREDIT' : 'DEBIT';
+            const makerDirection = takerSide === 'BUY' ? 'DEBIT' : 'CREDIT';
+            await tx.insert(ledgerEntries).values([
+              {
+                transactionId: trade.id,
+                userId: takerUserId,
+                asset: asset,
+                amount: amount.toString(),
+                direction: takerDirection,
+              },
+              {
+                transactionId: trade.id,
+                userId: makerUserId,
+                asset: asset,
+                amount: amount.toString(),
+                direction: makerDirection,
+              }
+            ]);
+            console.log(`Trade ${trade.id} locked. Taker(${takerUserId}) ${takerDirection}, Maker(${makerUserId}) ${makerDirection}`);
+            for (const userId of [takerUserId, makerUserId]) {
+              const [creditResult] = await tx
+                .select({ value: sum(ledgerEntries.amount) })
+                .from(ledgerEntries)
+                .where(and(
+                  eq(ledgerEntries.userId, userId),
+                  eq(ledgerEntries.asset, asset),
+                  eq(ledgerEntries.direction, 'CREDIT')
+                ));
+              const [debitResult] = await tx
+                .select({ value: sum(ledgerEntries.amount) })
+                .from(ledgerEntries)
+                .where(and(
+                  eq(ledgerEntries.userId, userId),
+                  eq(ledgerEntries.asset, asset),
+                  eq(ledgerEntries.direction, 'DEBIT')
+                ));
+              const newBalance = Number(creditResult?.value || 0) - Number(debitResult?.value || 0);
+              await producer.send({
+                topic: 'balance-updates',
+                messages: [{
+                  value: JSON.stringify({
+                    userId,
+                    asset,
+                    newBalance,
+                    timestamp: new Date().toISOString()
+                  }),
+                }],
+              });
+              console.log(`Balance broadcast: ${userId} → ${newBalance} ${asset}`);
+            }
+          });
+        } catch (error) {
+          console.error(`Failed to process trade:`, error);
+        }
+      }
+    },
+  });
+};
+
+run().catch(console.error);
+</file>
+
+<file path="ledger-service/package.json">
+{
+  "name": "ledger-service",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "db:push": "drizzle-kit push --config=drizzle.config.json",
+    "db:studio": "drizzle-kit studio --config=drizzle.config.json",
+    "dev": "tsx src/index.ts"
+  }
+}
+</file>
+
+<file path="market-data-service/src/config/kafka.ts">
+import { Kafka } from 'kafkajs';
+
+export const kafka = new Kafka({
+  clientId: 'market-data',
+  brokers: ['localhost:9092']
+});
+
+export const consumer = kafka.consumer({ groupId: 'market-data-group' });
+</file>
+
+<file path="market-data-service/src/config/redis.ts">
+import Redis from 'ioredis';
+
+export const redis = new Redis({
+  host: 'localhost',
+  port: 6379
+});
+
+redis.on('connect', () => {
+  console.log('Connected to Redis');
+});
+
+redis.on('error', (err) => {
+  console.error('Redis connection error:', err.message);
+});
+</file>
+
+<file path="market-data-service/src/services/globalPriceStream.ts">
+import WebSocket from 'ws';
+import { getIo } from '../sockets/io';
+import { redis } from '../config/redis';
+
+
+
+const TOP_20_PAIRS = [
+  'btcusdt', 'ethusdt', 'bnbusdt', 'solusdt', 'xrpusdt',
+  'adausdt', 'dogeusdt', 'avaxusdt', 'dotusdt', 'linkusdt',
+  'maticusdt', 'uniusdt', 'ltcusdt', 'bchusdt', 'shibusdt',
+  'nearusdt', 'aptusdt', 'filusdt', 'rndrusdt', 'apetusdt',
+  'atomusdt', 'vetusdt', 'xlmusdt', 'trxusdt', 'etcusdt',
+  'icpusdt', 'hbarusdt', 'algousdt', 'egldusdt', 'xtzusdt',
+  'aaveusdt', 'sandusdt', 'manausdt', 'axsusdt', 'grtusdt',
+  'ftmusdt', 'runeusdt', 'injusdt', 'opusdt', 'arbusdt'
+];
+
+export const startGlobalPriceStream = () => {
+
+  const streamParams = TOP_20_PAIRS.map(pair => `${pair}@trade`).join('/');
+  const wsUrl = `wss://stream.binance.com:9443/stream?streams=${streamParams}`;
+
+  const ws = new WebSocket(wsUrl);
+
+  ws.on('open', () => {
+    console.log(`Connected to Binance Global Firehose pairs)`);
+  });
+
+  ws.on('message', (data: WebSocket.Data) => {
+    try {
+      const payload = JSON.parse(data.toString());
+      
+      if (!payload.data) return;
+      const trade = payload.data;
+      
+      const priceData = {
+        asset: trade.s, 
+        price: parseFloat(trade.p),
+        amount: parseFloat(trade.q),
+        timestamp: new Date(trade.T).toISOString(),
+        source: 'BINANCE_GLOBAL'
+      };
+
+      redis.set(`price:${trade.s}`, JSON.stringify(priceData)).catch((err) => {
+        console.error('Redis set error:', err.message);
+      });
+
+      const io = getIo();
+      io.emit('global-price-update', priceData);
+      
+    } catch (error) {
+      console.error('Error parsing global price data:', error);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('Binance stream disconnected. Reconnecting in 5s...');
+    setTimeout(startGlobalPriceStream, 5000); 
+  });
+
+  ws.on('error', (err) => {
+    console.error('Binance stream error:', err.message);
+  });
+};
+</file>
+
+<file path="market-data-service/src/services/marketConsumer.ts">
+import { consumer } from '../config/kafka';
+import { getIo } from '../sockets/io';
+
+export const startMarketConsumer = async () => {
+  await consumer.connect();
+  console.log('Market Data subscribed to Kafka');
+  
+  await consumer.subscribe({ topic: 'completed-trades', fromBeginning: false });
+
+  await consumer.run({
+    eachMessage: async ({ message }) => {
+      if (!message.value) return;
+      
+      const tradeData = JSON.parse(message.value.toString());
+      console.log(`Broadcasting trade: ${tradeData.asset} @ $${tradeData.price}`);
+      
+      const io = getIo();
+      io.emit('price-update', tradeData);
+    },
+  });
+};
+</file>
+
+<file path="market-data-service/src/sockets/io.ts">
+import { Server, Socket } from 'socket.io';
+import http from 'http';
+
+let io: Server;
+
+export const initSocket = (server: http.Server) => {
+  io = new Server(server, {
+    cors: { origin: '*' }
+  });
+
+  io.on('connection', (socket: Socket) => {
+    console.log(`Client connected to live feed: ${socket.id}`);
+    
+    socket.on('disconnect', () => {
+      console.log(`Client disconnected: ${socket.id}`);
+    });
+  });
+
+  return io;
+};
+
+export const getIo = () => {
+  if (!io) {
+    throw new Error('Socket.io has not been initialized!');
+  }
+  return io;
+};
+</file>
+
+<file path="market-data-service/src/index.ts">
+import express from 'express';
+import http from 'http';
+import cors from 'cors';
+import { initSocket } from './sockets/io';
+import { startMarketConsumer } from './services/marketConsumer';
+import { startGlobalPriceStream } from './services/globalPriceStream'; 
+
+const app = express();
+app.use(cors());
+
+const server = http.createServer(app);
+initSocket(server);
+
+startMarketConsumer().catch(console.error);
+
+startGlobalPriceStream(); 
+
+const PORT = 3003;
+server.listen(PORT, () => {
+  console.log(`Market Data WebSocket Server running on port ${PORT}`);
+});
+</file>
+
+<file path="market-data-service/package.json">
+{
+  "name": "market-data-service",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "ioredis": "^5.11.1",
+    "kafkajs": "^2.2.4",
+    "socket.io": "^4.8.3",
+    "ws": "^8.21.0"
+  }
+}
+</file>
+
+<file path="matching-engine/src/config/kafka.ts">
+import { Kafka } from 'kafkajs';
+
+const kafka = new Kafka({
+  clientId: 'matching-engine',
+  brokers: ['localhost:9092']
+});
+
+export const consumer = kafka.consumer({ groupId: 'matching-group' });
+export const producer = kafka.producer();
+
+export const connectKafka = async () => {
+  await consumer.connect();
+  await producer.connect();
+  console.log('Kafka Connected: Consumer & Producer ready');
+};
+</file>
+
+<file path="matching-engine/src/config/redis.ts">
+import Redis from 'ioredis';
+
+const redis = new Redis({
+  host: 'localhost',
+  port: 6379,
+});
+
+redis.on('connect', () => {
+  console.log(' Redis Connected (Matching Engine)');
+});
+
+redis.on('error', (err) => {
+  console.error('Redis connection error:', err);
+});
+
+export default redis;
+</file>
+
+<file path="matching-engine/src/repositories/orderBookRepo.ts">
+import redis from '../config/redis';
+
+export const addOrder = async (asset: string, side: string, order: any) => {
+  const key = `orderbook:${asset}:${side}`;
+  await redis.zadd(key, order.price, JSON.stringify(order));
+};
+
+export const getOrderCount = async (asset: string, side: string) => {
+  const key = `orderbook:${asset}:${side}`;
+  return await redis.zcard(key);
+};
+
+export const getCheapestSeller = async (asset: string) => {
+  const key = `orderbook:${asset}:SELL`;
+  const sellers = await redis.zrange(key, 0, 0); 
+  return sellers.length > 0 ? JSON.parse(sellers[0]) : null;
+};
+
+export const getHighestBuyer = async (asset: string) => {
+  const key = `orderbook:${asset}:BUY`;
+  const buyers = await redis.zrevrange(key, 0, 0);
+  return buyers.length > 0 ? JSON.parse(buyers[0]) : null;
+};
+
+export const removeExactOrderString = async (asset: string, side: string, orderString: string) => {
+  const key = `orderbook:${asset}:${side}`;
+  await redis.zrem(key, orderString);
+};
+</file>
+
+<file path="matching-engine/src/services/matchingService.ts">
+import * as orderBook from '../repositories/orderBookRepo';
+import { producer } from '../config/kafka';
+
+export const processNewOrder = async (incomingOrder: any) => {
+  let remainingAmount = incomingOrder.amount;
+  let matchFound = false;
+
+  console.log(`\nProcessing ${incomingOrder.side} order for ${remainingAmount} ${incomingOrder.asset}`);
+
+  while (remainingAmount > 0) {
+    let bestMatch;
+
+    if (incomingOrder.side === 'BUY') {
+      bestMatch = await orderBook.getCheapestSeller(incomingOrder.asset);
+      if (!bestMatch || incomingOrder.price < bestMatch.price) break; 
+    } else {
+      bestMatch = await orderBook.getHighestBuyer(incomingOrder.asset);
+      if (!bestMatch || incomingOrder.price > bestMatch.price) break; 
+    }
+
+    matchFound = true;
+
+    const originalMakerString = JSON.stringify(bestMatch);
+    const originalSide = incomingOrder.side === 'BUY' ? 'SELL' : 'BUY';
+
+    const tradeAmount = Math.min(remainingAmount, bestMatch.amount);
+    remainingAmount -= tradeAmount;
+    bestMatch.amount -= tradeAmount;
+
+    console.log(`TRADE: ${tradeAmount} ${incomingOrder.asset} @ $${bestMatch.price}`);
+
+    await orderBook.removeExactOrderString(incomingOrder.asset, originalSide, originalMakerString);
+
+    if (bestMatch.amount > 0) {
+      await orderBook.addOrder(incomingOrder.asset, originalSide, bestMatch);
+      console.log(`   -> Maker partial fill: ${bestMatch.amount} left on book.`);
+    } else {
+      console.log(`   -> Maker order fully filled and removed.`);
+    }
+
+    await publishTrade(incomingOrder, bestMatch, tradeAmount, bestMatch.price);
+  }
+
+  if (remainingAmount > 0) {
+    incomingOrder.amount = remainingAmount;
+    await orderBook.addOrder(incomingOrder.asset, incomingOrder.side, incomingOrder);
+    
+    if (matchFound) {
+      console.log(`   -> Taker partial fill: ${remainingAmount} resting on book.`);
+    } else {
+      console.log(`   -> No match found. Entire order resting on book.`);
+    }
+  } else {
+    console.log(`   -> Taker order fully filled!`);
+  }
+};
+
+const publishTrade = async (taker: any, maker: any, amount: number, price: number) => {
+  await producer.send({
+    topic: 'completed-trades', 
+    messages: [{
+      value: JSON.stringify({
+        tradeId: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(), 
+        asset: taker.asset,
+        price: price, 
+        amount: amount,
+        takerOrderId: taker.orderId,
+        makerOrderId: maker.orderId,
+        takerUserId: taker.userId, 
+        makerUserId: maker.userId,
+        timestamp: new Date().toISOString()
+      }),
+    }],
+  });
+};
+</file>
+
+<file path="matching-engine/src/index.ts">
+import { consumer, connectKafka } from './config/kafka';
+import './config/redis'; 
+import { processNewOrder } from './services/matchingService';
+
+const run = async () => {
+  await connectKafka();
+
+  await consumer.subscribe({ topic: 'pending-orders', fromBeginning: true });
+
+  await consumer.run({
+    eachMessage: async ({ message }) => {
+      if (!message.value) return;
+
+      const order = JSON.parse(message.value.toString());
+      console.log(`\nMatching Engine caught: ${order.side} ${order.amount} ${order.asset} @ $${order.price}`);
+      
+      try {
+        await processNewOrder(order);
+      } catch (error) {
+        console.error('Error processing order:', error);
+      }
+    },
+  });
+};
+
+run().catch(console.error);
+</file>
+
+<file path="matching-engine/package.json">
+{
+  "name": "matching-engine",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+        "dev": "tsx src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+</file>
+
+<file path="order-service/drizzle/meta/_journal.json">
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1782926340397,
+      "tag": "0000_careful_mole_man",
+      "breakpoints": true
+    }
+  ]
+}
+</file>
+
+<file path="order-service/drizzle/meta/0000_snapshot.json">
+{
+  "id": "83504029-2ad0-4202-8333-c218abaa6cb2",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.orders": {
+      "name": "orders",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "asset": {
+          "name": "asset",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "side": {
+          "name": "side",
+          "type": "order_side",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price": {
+          "name": "price",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount": {
+          "name": "amount",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "order_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.trades": {
+      "name": "trades",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "trade_id": {
+          "name": "trade_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "asset": {
+          "name": "asset",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "side": {
+          "name": "side",
+          "type": "order_side",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "role",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price": {
+          "name": "price",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount": {
+          "name": "amount",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "trades_order_id_orders_id_fk": {
+          "name": "trades_order_id_orders_id_fk",
+          "tableFrom": "trades",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "order_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.order_side": {
+      "name": "order_side",
+      "schema": "public",
+      "values": [
+        "BUY",
+        "SELL"
+      ]
+    },
+    "public.order_status": {
+      "name": "order_status",
+      "schema": "public",
+      "values": [
+        "PENDING",
+        "FILLED",
+        "CANCELLED",
+        "PARTIAL"
+      ]
+    },
+    "public.role": {
+      "name": "role",
+      "schema": "public",
+      "values": [
+        "MAKER",
+        "TAKER"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
+</file>
+
+<file path="order-service/drizzle/0000_careful_mole_man.sql">
+CREATE TYPE "public"."order_side" AS ENUM('BUY', 'SELL');--> statement-breakpoint
+CREATE TYPE "public"."order_status" AS ENUM('PENDING', 'FILLED', 'CANCELLED', 'PARTIAL');--> statement-breakpoint
+CREATE TYPE "public"."role" AS ENUM('MAKER', 'TAKER');--> statement-breakpoint
+CREATE TABLE "orders" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" text NOT NULL,
+	"asset" text NOT NULL,
+	"side" "order_side" NOT NULL,
+	"price" numeric NOT NULL,
+	"amount" numeric NOT NULL,
+	"status" "order_status" DEFAULT 'PENDING' NOT NULL,
+	"created_at" timestamp DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE "trades" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"trade_id" text NOT NULL,
+	"user_id" text NOT NULL,
+	"order_id" uuid NOT NULL,
+	"asset" text NOT NULL,
+	"side" "order_side" NOT NULL,
+	"role" "role" NOT NULL,
+	"price" numeric NOT NULL,
+	"amount" numeric NOT NULL,
+	"created_at" timestamp DEFAULT now()
+);
+--> statement-breakpoint
+ALTER TABLE "trades" ADD CONSTRAINT "trades_order_id_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE no action ON UPDATE no action;
+</file>
+
+<file path="order-service/src/controllers/orderController.ts">
+import { Response } from 'express';
+import { producer } from '../kafka/client';
+import { GatewayRequest } from '../../../../shared';
+import { db } from '../db';
+import { orders } from '../db/schema';
+import { eq, desc } from 'drizzle-orm';
+import { trades } from '../db/schema'; 
+
+
+export const placeOrder = async (req: GatewayRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const { asset, amount, price, side } = req.body;
+
+    if (!userId || !asset || !amount || !price || !side) {
+      res.status(400).json({ error: 'Missing required order fields' });
+      return;
+    }
+
+    const [savedOrder] = await db.insert(orders).values({
+      userId,
+      asset,
+      side,
+      price: price.toString(),
+      amount: amount.toString(),
+      status: 'PENDING',
+    }).returning();
+
+    await producer.send({
+      topic: 'pending-orders',
+      messages: [{
+        key: userId,
+        value: JSON.stringify({
+          orderId: savedOrder.id,  
+          userId,
+          asset,
+          amount: Number(amount),
+          price: Number(price),
+          side,
+          timestamp: new Date().toISOString(),
+        }),
+      }],
+    });
+
+    res.status(201).json({ success: true, orderId: savedOrder.id }); 
+  } catch (error) {
+    console.error('Place order error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getMyOrders = async (req: GatewayRequest, res: Response) => {
+  try {
+    const myOrders = await db
+      .select()
+      .from(orders)           
+      .where(eq(orders.userId, req.userId!))
+      .orderBy(desc(orders.createdAt));
+
+    res.json({ success: true, orders: myOrders });
+  } catch (error) {
+    console.error('Get orders error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getMyTrades = async (req: GatewayRequest, res: Response) => {
+  const userId = req.userId;
+  const userTrades = await db.select().from(trades).where(eq(trades.userId, userId!)).orderBy(desc(trades.createdAt));
+  res.json({ success: true, trades: userTrades });
+};
+</file>
+
+<file path="order-service/src/db/index.ts">
+import dotenv from 'dotenv';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+import * as schema from './schema';
+
+dotenv.config();
+
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+export const db = drizzle(pool, { schema });
+</file>
+
+<file path="order-service/src/db/schema.ts">
+import { pgTable, uuid, text, numeric, timestamp, pgEnum } from 'drizzle-orm/pg-core';
+
+export const orderSideEnum = pgEnum('order_side', ['BUY', 'SELL']);
+export const orderStatusEnum = pgEnum('order_status', ['PENDING', 'FILLED', 'CANCELLED', 'PARTIAL']);
+
+export const tradeRoleEnum= pgEnum('trade_role', ['MAKER', 'TAKER']);
+
+export const orders = pgTable('orders', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  userId:    text('user_id').notNull(),
+  asset:     text('asset').notNull(),
+  side:      orderSideEnum('side').notNull(),
+  price:     numeric('price').notNull(),
+  amount:    numeric('amount').notNull(),
+  status:    orderStatusEnum('status').notNull().default('PENDING'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const trades = pgTable('trades', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tradeId: text('trade_id').notNull(), 
+  userId: text('user_id').notNull(),
+  orderId: uuid('order_id').notNull().references(() => orders.id),
+  asset: text('asset').notNull(),
+  side: orderSideEnum('side').notNull(),
+  role: tradeRoleEnum('role').notNull(), 
+  price: numeric('price').notNull(),
+  amount: numeric('amount').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+</file>
+
+<file path="order-service/src/kafka/client.ts">
+import { Kafka } from 'kafkajs';
+
+export const kafka = new Kafka({
+  clientId: 'order-service',
+  brokers: ['localhost:9092'] 
+});
+
+export const producer = kafka.producer();
+
+export const connectProducer = async () => {
+  try {
+    await producer.connect();
+    console.log(' Order Service successfully connected to Kafka Producer');
+  } catch (error) {
+    console.error('Failed to connect to Kafka:', error);
+  }
+};
+</file>
+
+<file path="order-service/src/kafka/consumer.ts">
+import { kafka } from './client';
+import { db } from '../db';
+import { trades, orders } from '../db/schema';
+import { eq } from 'drizzle-orm';
+
+const consumer = kafka.consumer({ groupId: 'order-service-history-group' });
+
+export const startOrderConsumer = async () => {
+  await consumer.connect();
+  await consumer.subscribe({ topic: 'completed-trades', fromBeginning: true });
+  
+  await consumer.run({
+    eachMessage: async ({ message }) => {
+      if (!message.value) return;
+      const tradeData = JSON.parse(message.value.toString());
+      const { tradeId, asset, price, amount, takerOrderId, makerOrderId, takerUserId, makerUserId } = tradeData;
+const [takerOrder] = await db
+  .select()
+  .from(orders)
+  .where(eq(orders.id, takerOrderId));
+
+const [makerOrder] = await db
+  .select()
+  .from(orders)
+  .where(eq(orders.id, makerOrderId));
+
+if (!takerOrder || !makerOrder) {
+  console.warn(`
+====================================================
+Trade skipped
+Trade ID : ${tradeId}
+Maker ID : ${makerOrderId}
+Taker ID : ${takerOrderId}
+Reason   : Order not found
+====================================================
+`);
+
+  // Skip this bad message
+  return;
+}
+
+      // 2. Insert Trade History
+      await db.transaction(async (tx) => {
+        await tx.insert(trades).values([
+          { tradeId, userId: takerUserId, orderId: takerOrderId, asset, side: takerOrder.side, role: 'TAKER', price: price.toString(), amount: amount.toString() },
+          { tradeId, userId: makerUserId, orderId: makerOrderId, asset, side: makerOrder.side, role: 'MAKER', price: price.toString(), amount: amount.toString() }
+        ]);
+
+        await tx.update(orders).set({ status: 'FILLED' }).where(eq(orders.id, takerOrderId));
+        await tx.update(orders).set({ status: 'FILLED' }).where(eq(orders.id, makerOrderId));
+      });
+      console.log(`[Order Service] Trade ${tradeId} recorded successfully.`);
+    },
+  });
+};
+</file>
+
+<file path="order-service/src/middleware/trustgateway.ts">
+import { Request, Response, NextFunction } from 'express';
+
+export interface GatewayRequest extends Request {
+  userId?: string;
+  userEmail?: string;
+}
+
+export const trustGateway = (req: GatewayRequest, res: Response, next: NextFunction) => {
+  const userId = req.headers['x-user-id'] as string;
+  const userEmail = req.headers['x-user-email'] as string;
+
+  if (!userId) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  req.userId = userId;
+  req.userEmail = userEmail;
+  return next();
+};
+</file>
+
+<file path="order-service/src/routes/orderRoutes.ts">
+import { Router } from 'express';
+import { placeOrder, getMyOrders , getMyTrades } from '../controllers/orderController';
+import { trustGateway } from '../middleware/trustgateway';
+
+const router = Router();
+
+router.post('/place',trustGateway, placeOrder);
+
+router.get('/my-orders', trustGateway, getMyOrders);
+
+router.get('/my-trades', trustGateway, getMyTrades);
+
+export default router;
+</file>
+
+<file path="order-service/src/app.ts">
+import express from 'express';
+import orderRoutes from './routes/orderRoutes.ts';
+import { connectProducer } from './kafka/client'; 
+import { startOrderConsumer } from './kafka/consumer'; 
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+app.use(express.json());
+app.use('/api/orders', orderRoutes);
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'Order Service is healthy' });
+});
+
+connectProducer().then(async () => {
+  await startOrderConsumer(); 
+  app.listen(PORT, () => console.log(`Order Service running on port ${PORT}`));
+});
+</file>
+
+<file path="order-service/drizzle.config.ts">
+import type { Config } from 'drizzle-kit';
+import dotenv from 'dotenv';
+import path from 'path';
+
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+
+export default {
+schema: './src/db/schema.ts', 
+  out: './drizzle',
+  dialect: 'postgresql',
+  dbCredentials: {
+    url: process.env.DATABASE_URL!,
+  },
+} satisfies Config;
+</file>
+
+<file path="order-service/package.json">
+{
+  "name": "order-service",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx src/app.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10"
+  }
+}
+</file>
+
+<file path="wallet-service/src/cache/warmUpCache.ts">
+import { sql } from 'drizzle-orm';
+import { ledgerDb } from '../config/ledgerDb';
+import { redis } from '../config/redis';
+
+export const warmUpCache = async () => {
+  console.log('[Wallet Cache] Starting warm up from ledger DB...');
+
+  try {
+    const rows = await ledgerDb.execute(sql`
+      SELECT
+        user_id,
+        asset,
+        SUM(CASE WHEN direction = 'CREDIT' THEN amount::numeric ELSE 0 END) -
+        SUM(CASE WHEN direction = 'DEBIT'  THEN amount::numeric ELSE 0 END) AS balance
+      FROM ledger_entries
+      GROUP BY user_id, asset
+    `);
+
+    if (rows.rows.length === 0) {
+      console.log('⚠️  [Wallet Cache] No ledger entries found. Cache stays empty.');
+      return;
+    }
+
+    for (const row of rows.rows) {
+      const { user_id, asset, balance } = row as {
+        user_id: string;
+        asset: string;
+        balance: string;
+      };
+
+      const redisKey = `wallet:${user_id}`;
+      await redis.hset(redisKey, asset.toUpperCase(), parseFloat(balance));
+      console.log(`[Wallet Cache] ${user_id} → ${asset}: ${balance}`);
+    }
+
+    console.log(`[Wallet Cache] Warm up complete. ${rows.rows.length} balances restored.`);
+
+  } catch (error) {
+    console.error('[Wallet Cache] Warm up failed:', error);
+  }
+};
+</file>
+
+<file path="wallet-service/src/config/kafka.ts">
+import { Kafka } from 'kafkajs';
+
+const kafka = new Kafka({ 
+    clientId: 'wallet-service',
+    brokers: ['localhost:9092']
+ });
+ 
+export const consumer = kafka.consumer({ groupId: 'wallet-group' });
+</file>
+
+<file path="wallet-service/src/config/redis.ts">
+import Redis from 'ioredis';
+
+export const redis = new Redis(
+    { 
+        host: 'localhost', 
+        port: 6379
+     }
+);
+</file>
+
+<file path="wallet-service/src/controllers/walletController.ts">
+import { Response } from 'express';
+import { redis } from '../config/redis'; 
+import { GatewayRequest } from '../../../../shared';
+
+export const getBalance = async (req: GatewayRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+
+    const balance = await redis.hgetall(`wallet:${userId}`);
+
+    res.status(200).json({
+      success: true,
+      userId,
+      balance: balance || {},
+    });
+  } catch (error) {
+    console.error('Get balance error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+</file>
+
+<file path="wallet-service/src/middleware/trustgateway.ts">
+import { Request, Response, NextFunction } from 'express';
+
+export interface GatewayRequest extends Request {
+  userId?: string;
+  userEmail?: string;
+}
+
+export const trustGateway = (req: GatewayRequest, res: Response, next: NextFunction) => {
+  const userId = req.headers['x-user-id'] as string;
+  const userEmail = req.headers['x-user-email'] as string;
+
+  if (!userId) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  req.userId = userId;
+  req.userEmail = userEmail;
+  return next();
+};
+</file>
+
+<file path="wallet-service/src/routes/walletRoutes.ts">
+import { Router } from 'express';
+import { getBalance } from '../controllers/walletController';
+import { trustGateway } from '../middleware/trustgateway';
+
+const router = Router();
+
+router.get('/balance', trustGateway, getBalance);
+
+export default router;
+</file>
+
+<file path="wallet-service/src/services/balanceConsumer.ts">
+import { consumer } from '../config/kafka';
+import { redis } from '../config/redis';
+
+export const startBalanceConsumer = async () => {
+  await consumer.connect();
+  await consumer.subscribe({ topic: 'balance-updates', fromBeginning: true });
+
+  await consumer.run({
+    eachMessage: async ({ message }) => {
+      if (!message.value) return;
+      const { userId, asset, newBalance } = JSON.parse(message.value.toString());
+      
+      const redisKey = `wallet:${userId}`;
+      await redis.hset(redisKey, asset.toUpperCase(), newBalance);
+      console.log(`Wallet Cache Updated for User ${userId}: ${asset} = ${newBalance}`);
+    },
+  });
+};
+</file>
+
+<file path="wallet-service/src/services/fundingConsumer.ts">
+import { Kafka } from 'kafkajs';
+import { redis } from '../config/redis';
+
+const kafka = new Kafka({
+  clientId: 'wallet-service',
+  brokers: [process.env.KAFKA_BROKER || 'localhost:9092'],
+});
+
+const consumer = kafka.consumer({ groupId: 'wallet-funding-group' });
+const producer = kafka.producer(); 
+
+export const startFundingConsumer = async () => {
+  try {
+    await producer.connect();
+    await consumer.connect();
+    
+    await consumer.subscribe({ topic: 'deposit-cleared', fromBeginning: true });
+    await consumer.subscribe({ topic: 'withdrawal-requested', fromBeginning: true });
+
+    console.log('📥 [Wallet Service] Listening for deposits and withdrawal requests...');
+
+    await consumer.run({
+      eachMessage: async ({ topic, message }) => {
+        if (!message.value) return;
+        const event = JSON.parse(message.value.toString());
+
+        if (topic === 'deposit-cleared') {
+          const { userId, asset, amount, eventId } = event;
+          const redisKey = `wallet:${userId}`;
+          const assetKey = asset.toUpperCase(); 
+
+          const newBalance = await redis.hincrbyfloat(redisKey, assetKey, parseFloat(amount)); 
+          console.log(`[Wallet Cache] Deposit ${eventId} applied. ${userId} new ${assetKey} balance: ${newBalance}`);
+        }
+
+        if (topic === 'withdrawal-requested') {
+          const { transactionId, userId, asset, amount } = event;
+          const redisKey = `wallet:${userId}`;
+          const assetKey = asset.toUpperCase();
+
+          console.log(` [Wallet] Validating withdrawal ${transactionId} for ${amount} ${assetKey}...`);
+          
+          const currentBalanceStr = await redis.hget(redisKey, assetKey); 
+          const currentBalance = currentBalanceStr ? parseFloat(currentBalanceStr) : 0;
+          const requestedAmount = parseFloat(amount);
+
+          if (currentBalance >= requestedAmount) {
+            const newBalance = await redis.hincrbyfloat(redisKey, assetKey, -requestedAmount); 
+            console.log(`[Wallet] Funds locked. New balance: ${newBalance}. Approving.`);
+
+            await producer.send({
+              topic: 'withdrawal-validated',
+              messages: [{ value: JSON.stringify({ transactionId, userId, asset, amount, status: 'APPROVED' }) }]
+            });
+          } else {
+            console.log(`[Wallet] Insufficient funds (${currentBalance} < ${requestedAmount}). Rejecting.`);
+
+            await producer.send({
+              topic: 'withdrawal-rejected',
+              messages: [{ value: JSON.stringify({ transactionId, userId, asset, amount, status: 'REJECTED', reason: 'INSUFFICIENT_FUNDS' }) }]
+            });
+          }
+        }
+      },
+    });
+  } catch (error) {
+    console.error('[Wallet Consumer] Error running Kafka consumer:', error);
+  }
+};
+</file>
+
+<file path="wallet-service/src/index.ts">
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+dotenv.config();
+
+import walletRoutes from './routes/walletRoutes';
+import { startBalanceConsumer } from './services/balanceConsumer';
+import { startFundingConsumer } from './services/fundingConsumer';
+import { warmUpCache } from './cache/warmUpCache';
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+app.use('/api/wallet', walletRoutes);
+
+const start = async () => {
+  await warmUpCache();           
+  await startBalanceConsumer();  
+  await startFundingConsumer();
+
+  app.listen(3004, () => {
+    console.log('Wallet Query Service running on port 3004');
+  });
+};
+
+start().catch(console.error);
+</file>
+
+<file path="wallet-service/package.json">
+{
+  "name": "wallet-service",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "kafkajs": "^2.2.4"
+  }
+}
+</file>
+
+</files>

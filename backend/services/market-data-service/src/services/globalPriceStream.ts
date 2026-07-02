@@ -1,5 +1,7 @@
 import WebSocket from 'ws';
 import { getIo } from '../sockets/io';
+import { redis } from '../config/redis';
+
 
 
 const TOP_20_PAIRS = [
@@ -21,7 +23,7 @@ export const startGlobalPriceStream = () => {
   const ws = new WebSocket(wsUrl);
 
   ws.on('open', () => {
-    console.log(`Connected to Binance Global Firehose (${TOP_20_PAIRS.length} pairs)`);
+    console.log(`Connected to Binance Global Firehose pairs)`);
   });
 
   ws.on('message', (data: WebSocket.Data) => {
@@ -38,6 +40,10 @@ export const startGlobalPriceStream = () => {
         timestamp: new Date(trade.T).toISOString(),
         source: 'BINANCE_GLOBAL'
       };
+
+      redis.set(`price:${trade.s}`, JSON.stringify(priceData)).catch((err) => {
+        console.error('Redis set error:', err.message);
+      });
 
       const io = getIo();
       io.emit('global-price-update', priceData);
