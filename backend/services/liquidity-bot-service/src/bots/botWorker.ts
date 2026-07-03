@@ -42,6 +42,14 @@ const getInventoryFactor = (available: number, minBalance: number): number => {
   return LOW_INVENTORY_FACTOR;
 };
 
+const getTopUpAmount = (config: BotConfig, side: OrderSide): number => {
+  if (side === 'buy') {
+    return config.topUpQuoteAmount ?? config.topUpAmount ?? 0;
+  }
+
+  return config.topUpBaseAmount ?? config.topUpAmount ?? 0;
+};
+
 // Builds a randomized ladder of target buy/sell levels around the mid price.
 const buildTargetLadder = (
   config: BotConfig,
@@ -105,15 +113,21 @@ const reserveBalance = async (
   }
 
   if (available < minThreshold && !toppedUpAssets.has(asset)) {
+    const topUpAmount = getTopUpAmount(config, side);
+
+    if (topUpAmount <= 0) {
+      return false;
+    }
+
     console.log(`[BotWorker:${config.id}] Low ${asset} balance (${available}), topping up...`);
-    const success = await topUpBalance(config.id, asset, config.topUpAmount);
+    const success = await topUpBalance(config.id, asset, topUpAmount);
     toppedUpAssets.add(asset);
 
     if (!success) {
       return false;
     }
 
-    available += config.topUpAmount;
+    available += topUpAmount;
     balances.set(asset, available);
   }
 

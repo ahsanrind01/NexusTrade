@@ -14,7 +14,9 @@ export interface BotConfig {
   baseAsset: string;         // e.g. 'BTC' — asset balance checked before sells
   minQuoteBalance: number;   // top-up trigger threshold for quote asset
   minBaseBalance: number;    // top-up trigger threshold for base asset
-  topUpAmount: number;       // amount to request when topping up
+  topUpAmount?: number;      // legacy fallback amount to request when topping up
+  topUpQuoteAmount: number;
+  topUpBaseAmount: number;
 }
 
 // ---- Market data (mirrors market-data-service's Redis payload) ----
@@ -51,13 +53,20 @@ export interface Balance {
 // ---- Funding ----
 
 export interface DepositIntentResponse {
-  intentId: string;
-  asset: string;
-  amount: number;
+  success: boolean;
+  transaction: {
+    id: string;
+    status: string;
+    type: string;
+    amount: string | number;
+    asset: string;
+    stripeCheckoutUrl?: string | null;
+    cryptoDepositAddress?: string | null;
+  };
 }
 
 export interface SimulateCryptoDepositRequest {
-  intentId: string;
+  transactionId: string;
 }
 
 // ---- Orders ----
@@ -81,6 +90,33 @@ export interface PlaceOrderRequest {
   type: 'limit';
   price: number;
   quantity: number;
+}
+
+export interface OrderServiceOrder {
+  id: string;
+  userId: string;
+  asset: string;
+  side: 'BUY' | 'SELL';
+  price: string | number;
+  amount: string | number;
+  status: 'PENDING' | 'FILLED' | 'CANCELLED' | 'PARTIAL';
+  createdAt: string;
+}
+
+export interface OrderServiceOrderListResponse {
+  success: boolean;
+  orders: OrderServiceOrder[];
+}
+
+export interface PlaceOrderResponse {
+  success: boolean;
+  orderId: string;
+}
+
+export interface WalletBalanceResponse {
+  success: boolean;
+  userId: string;
+  balance: Record<string, string | number>;
 }
 
 // ---- Ladder planning (used internally by BotWorker) ----

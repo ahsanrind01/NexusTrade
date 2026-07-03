@@ -55,6 +55,20 @@ export const processNewOrder = async (incomingOrder: any) => {
   }
 };
 
+export const processCancelledOrder = async (cancelledOrder: any) => {
+  const removed = await orderBook.removeOrderById(
+    cancelledOrder.asset,
+    cancelledOrder.side,
+    cancelledOrder.orderId
+  );
+
+  if (removed) {
+    console.log(`Cancelled order removed from book: ${cancelledOrder.orderId}`);
+  } else {
+    console.log(`Cancelled order not found in book: ${cancelledOrder.orderId}`);
+  }
+};
+
 const publishTrade = async (taker: any, maker: any, amount: number, price: number) => {
   await producer.send({
     topic: 'completed-trades', 
@@ -68,6 +82,7 @@ const publishTrade = async (taker: any, maker: any, amount: number, price: numbe
         makerOrderId: maker.orderId,
         takerUserId: taker.userId, 
         makerUserId: maker.userId,
+        takerSide: taker.side,
         timestamp: new Date().toISOString()
       }),
     }],

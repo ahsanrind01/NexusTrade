@@ -26,3 +26,22 @@ export const removeExactOrderString = async (asset: string, side: string, orderS
   const key = `orderbook:${asset}:${side}`;
   await redis.zrem(key, orderString);
 };
+
+export const removeOrderById = async (asset: string, side: string, orderId: string) => {
+  const key = `orderbook:${asset}:${side}`;
+  const orders = await redis.zrange(key, 0, -1);
+
+  for (const orderString of orders) {
+    try {
+      const order = JSON.parse(orderString);
+      if (order.orderId === orderId) {
+        await redis.zrem(key, orderString);
+        return true;
+      }
+    } catch {
+      console.warn(`[OrderBook] Skipping malformed order while cancelling ${orderId}`);
+    }
+  }
+
+  return false;
+};

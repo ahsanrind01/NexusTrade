@@ -3,7 +3,7 @@ import { producer } from '../kafka/client';
 import { GatewayRequest } from '../../../../shared';
 import { db } from '../db';
 import { orders } from '../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { and, eq, desc } from 'drizzle-orm';
 import { trades } from '../db/schema'; 
 
 
@@ -68,4 +68,57 @@ export const getMyTrades = async (req: GatewayRequest, res: Response) => {
   const userId = req.userId;
   const userTrades = await db.select().from(trades).where(eq(trades.userId, userId!)).orderBy(desc(trades.createdAt));
   res.json({ success: true, trades: userTrades });
+};
+
+export const cancelOrder = async (req: GatewayRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const orderIdParam = req.params.orderId;
+    const orderId = Array.isArray(orderIdParam) ? orderIdParam[0] : orderIdParam;
+
+    if (!userId || !orderId) {
+      res.status(400).json({ success: false, error: 'Missing order id' });
+      return;
+    }
+
+    const [existingOrder] = await db
+      .select()
+      .from(orders)
+      .where(and(eq(orders.id, orderId), eq(orders.userId, userId)));
+
+    if (!existingOrder) {
+      res.status(404).json({ success: false, error: 'Order not found' });
+      return;
+    }
+
+    if (existingOrder.status === 'FILLED' || existingOrder.status === 'CANCELLED') {
+      res.status(400).json({ success: false, error: `Order is already ${existingOrder.status}` });
+      return;
+    }
+
+    const [cancelledOrder] = await db
+      .update(orders)
+      .set({ status: 'CANCELLED' })
+      .where(and(eq(orders.id, orderId), eq(orders.userId, userId)))
+      .returning();
+
+    await producer.send({
+      topic: 'cancelled-orders',
+      messages: [{
+        key: userId,
+        value: JSON.stringify({
+          orderId: cancelledOrder.id,
+          userId,
+          asset: cancelledOrder.asset,
+          side: cancelledOrder.side,
+          timestamp: new Date().toISOString(),
+        }),
+      }],
+    });
+
+    res.json({ success: true, order: cancelledOrder });
+  } catch (error) {
+    console.error('Cancel order error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 };

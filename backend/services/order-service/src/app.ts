@@ -1,5 +1,5 @@
 import express from 'express';
-import orderRoutes from './routes/orderRoutes.ts';
+import orderRoutes from './routes/orderRoutes';
 import { connectProducer } from './kafka/client'; 
 import { startOrderConsumer } from './kafka/consumer'; 
 

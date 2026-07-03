@@ -4,7 +4,7 @@ import { loginAllBots } from './services/authClient';
 import { startBotWorker } from './bots/botWorker';
 
 const app = express();
-const PORT = process.env.PORT || 3006;
+const PORT = process.env.PORT || 3008;
 
 const activeWorkers = new Map<string, () => void>();
 

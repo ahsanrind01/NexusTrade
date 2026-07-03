@@ -1,22 +1,29 @@
 import { getToken, invalidateSession } from './authClient';
-import { Balance } from '../types';
+import { Balance, WalletBalanceResponse } from '../types';
 import { getErrorDetails, requestWithRetry } from './httpClient';
 
 const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:3000';
 
-// Fetches all balances for a bot account via the existing wallet-service endpoint.
-// Assumption: GET /api/wallet/balance returns an array of { asset, available, locked }
-// for the authenticated user. Adjust the parsing below if your endpoint instead
-// takes a ?asset= query param or returns a single object.
+const toBalances = (response: WalletBalanceResponse): Balance[] => {
+  return Object.entries(response.balance || {}).map(([asset, available]) => ({
+    asset: asset.toUpperCase(),
+    available: Number(available) || 0
+  }));
+};
+
+// Fetches balances through the existing wallet-service response shape and
+// normalizes it for the bot's internal inventory calculations.
 export const getBalances = async (botId: string): Promise<Balance[]> => {
   const token = await getToken(botId);
 
   try {
-    return await requestWithRetry<Balance[]>({
+    const response = await requestWithRetry<WalletBalanceResponse>({
       method: 'GET',
       url: `${GATEWAY_URL}/api/wallet/balance`,
       headers: { Authorization: `Bearer ${token}` }
     });
+
+    return toBalances(response);
   } catch (err: any) {
     if (err.response?.status === 401) {
       invalidateSession(botId);

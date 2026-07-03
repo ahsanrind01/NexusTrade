@@ -19,16 +19,16 @@ export const topUpBalance = async (
     const intentResponse = await requestWithRetry<DepositIntentResponse>({
       method: 'POST',
       url: `${GATEWAY_URL}/api/funding/deposit/intent`,
-      data: { asset, amount },
+      data: { asset, amount, type: 'CRYPTO_ETH' },
       headers
     });
 
-    const { intentId } = intentResponse;
+    const transactionId = intentResponse.transaction.id;
 
     await requestWithRetry<void>({
       method: 'POST',
       url: `${GATEWAY_URL}/api/funding/deposit/simulate-crypto`,
-      data: { intentId },
+      data: { transactionId },
       headers
     });
 

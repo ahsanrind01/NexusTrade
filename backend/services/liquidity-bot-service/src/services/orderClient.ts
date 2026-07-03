@@ -1,12 +1,35 @@
 import { getToken, invalidateSession } from './authClient';
-import { Order, PlaceOrderRequest } from '../types';
+import {
+  Order,
+  OrderServiceOrder,
+  OrderServiceOrderListResponse,
+  PlaceOrderRequest,
+  PlaceOrderResponse
+} from '../types';
 import { getErrorDetails, requestWithRetry } from './httpClient';
 
 const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:3000';
 
-// All order operations go through the same public /api/orders/* routes
-// exposed via api-gateway — identical to what the mobile app calls.
-// No Redis, Kafka, or matching-engine access from this service at all.
+const toExchangeSide = (side: PlaceOrderRequest['side']): 'BUY' | 'SELL' => {
+  return side === 'buy' ? 'BUY' : 'SELL';
+};
+
+const fromServiceOrder = (order: OrderServiceOrder): Order => ({
+  id: order.id,
+  symbol: order.asset,
+  side: order.side === 'BUY' ? 'buy' : 'sell',
+  price: Number(order.price),
+  quantity: Number(order.amount),
+  status: order.status === 'PENDING' ? 'open' : order.status.toLowerCase() as Order['status'],
+  createdAt: order.createdAt
+});
+
+const isActiveOrder = (order: OrderServiceOrder): boolean => {
+  return order.status === 'PENDING' || order.status === 'PARTIAL';
+};
+
+// All order operations go through the public Order Service APIs exposed by the
+// gateway. The bot adapts its internal shape to the existing exchange contract.
 
 export const placeOrder = async (
   botId: string,
@@ -15,12 +38,27 @@ export const placeOrder = async (
   const token = await getToken(botId);
 
   try {
-    return await requestWithRetry<Order>({
+    const response = await requestWithRetry<PlaceOrderResponse>({
       method: 'POST',
-      url: `${GATEWAY_URL}/api/orders`,
-      data: request,
+      url: `${GATEWAY_URL}/api/orders/place`,
+      data: {
+        asset: request.symbol,
+        amount: request.quantity,
+        price: request.price,
+        side: toExchangeSide(request.side)
+      },
       headers: { Authorization: `Bearer ${token}` }
     });
+
+    return {
+      id: response.orderId,
+      symbol: request.symbol,
+      side: request.side,
+      price: request.price,
+      quantity: request.quantity,
+      status: 'open',
+      createdAt: new Date().toISOString()
+    };
   } catch (err: any) {
     if (err.response?.status === 401) {
       invalidateSession(botId);
@@ -34,12 +72,15 @@ export const getOpenOrders = async (botId: string, symbol: string): Promise<Orde
   const token = await getToken(botId);
 
   try {
-    return await requestWithRetry<Order[]>({
+    const response = await requestWithRetry<OrderServiceOrderListResponse>({
       method: 'GET',
-      url: `${GATEWAY_URL}/api/orders`,
-      headers: { Authorization: `Bearer ${token}` },
-      params: { symbol, status: 'open' }
+      url: `${GATEWAY_URL}/api/orders/my-orders`,
+      headers: { Authorization: `Bearer ${token}` }
     });
+
+    return response.orders
+      .filter(order => order.asset === symbol && isActiveOrder(order))
+      .map(fromServiceOrder);
   } catch (err: any) {
     if (err.response?.status === 401) {
       invalidateSession(botId);
