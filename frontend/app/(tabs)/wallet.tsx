@@ -14,9 +14,15 @@ import Animated, {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontFamily } from '../../constants/typography';
-import { api } from '../../lib/api';
 import { useWallet } from '../../hooks/useWallet';
 import { useWalletStore } from '../../stores/walletStore';
+import {
+  useFundingHistory,
+  useCreateDepositIntent,
+  useSimulateCryptoDeposit,
+  useCreateWithdrawalIntent,
+} from '../../hooks/useFunding';
+import { useFundingStore } from '../../stores/fundingStore';
 
 // [P6] Evaluated once — avoids conditional require() inside render
 let BlurView: any = null;
@@ -71,7 +77,7 @@ type HistoryItem = {
   type: 'DEPOSIT' | 'WITHDRAW';
   asset: string;
   amount: string;
-  status: 'CLEARED' | 'COMPLETED' | 'PENDING' | 'CANCELLED';
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   time: string;
 };
 
@@ -146,7 +152,16 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
 }) {
   const [asset, setAsset] = useState<typeof MODAL_ASSETS[number]>('USDT');
   const [amount, setAmount] = useState('');
-  const [loading, setLoading] = useState(false);
+
+  // [B3,B5] Real API calls to the funding service through the gateway,
+  // via React Query mutations (see hooks/useFunding.ts).
+  const createDepositIntent = useCreateDepositIntent();
+  const simulateCryptoDeposit = useSimulateCryptoDeposit();
+  const createWithdrawalIntent = useCreateWithdrawalIntent();
+  const loading =
+    createDepositIntent.isPending ||
+    simulateCryptoDeposit.isPending ||
+    createWithdrawalIntent.isPending;
 
   const translateY = useSharedValue(600);
   const backdropOp = useSharedValue(0);
@@ -164,30 +179,45 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: translateY.value }] }));
   const backdropStyle = useAnimatedStyle(() => ({ opacity: backdropOp.value }));
 
-  // [B3,B5] Real API calls to the funding service through the gateway
+  // [B3,B5] Real API calls to the funding service through the gateway.
+  // Deposits go through a two-step flow on the backend: an intent is
+  // created first (POST /funding/deposit/intent); for on-chain assets we
+  // then immediately simulate the confirmation (POST
+  // /funding/deposit/simulate-crypto) since there's no real chain watcher
+  // in this environment. FIAT_STRIPE intents settle via the Stripe
+  // webhook instead, so no follow-up call is needed there.
   const handleSubmit = async () => {
     const parsed = parseFloat(amount);
     if (!amount || isNaN(parsed) || parsed <= 0) {
       Alert.alert('Invalid Amount', 'Please enter a valid amount.');
       return;
     }
-    setLoading(true);
+
+    // [B5] type field: stablecoins are fiat on-ramp, everything else is on-chain
+    const type = FIAT_ASSETS.has(asset) ? 'FIAT_STRIPE' : 'CRYPTO_ETH';
+
     try {
-      // [B5] type field: stablecoins are fiat on-ramp, everything else is on-chain
-      const type = FIAT_ASSETS.has(asset) ? 'FIAT_STRIPE' : 'CRYPTO_ETH';
-      const endpoint = mode === 'deposit' ? '/funding/deposit' : '/funding/withdraw';
-      await api.post(endpoint, { asset, amount, type });
-      Alert.alert(
-        'Success',
-        `${mode === 'deposit' ? 'Deposit' : 'Withdrawal'} request submitted.`
-      );
+      if (mode === 'deposit') {
+        const { transaction } = await createDepositIntent.mutateAsync({ asset, amount, type });
+        if (type === 'CRYPTO_ETH') {
+          await simulateCryptoDeposit.mutateAsync(transaction.id);
+        }
+        Alert.alert('Success', 'Deposit request submitted.');
+      } else {
+        await createWithdrawalIntent.mutateAsync({
+          asset,
+          amount,
+          type,
+          // Mock destination for the on-chain path; a real UI would collect this.
+          destinationAddress: type === 'CRYPTO_ETH' ? '0xUserProvidedDestinationAddress' : undefined,
+        });
+        Alert.alert('Success', 'Withdrawal request submitted.');
+      }
       setAmount('');
       onSuccess();  // trigger a balance refetch
       onClose();
     } catch (err: any) {
       Alert.alert('Failed', err.response?.data?.error || 'Something went wrong');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -373,7 +403,9 @@ const AssetCard = memo(function AssetCard({
 // ─── [P3] HistoryRow — memo: history items are immutable after fetch ───────────
 const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
   const isDeposit = item.type === 'DEPOSIT';
-  const isPending = item.status === 'PENDING';
+  const isPending = item.status === 'PENDING' || item.status === 'PROCESSING';
+  const isFailed = item.status === 'FAILED';
+  const statusColor = isFailed ? T.loss : isPending ? T.gold : T.gain;
 
   return (
     <Animated.View entering={FadeInDown.delay(Math.min(index, 8) * 50).springify().damping(18)} style={styles.historyRow}>
@@ -398,10 +430,8 @@ const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem
         <Text style={[styles.historyAmount, { color: isDeposit ? T.gain : T.loss }]}>
           {isDeposit ? '+' : '-'}{item.amount} {item.asset}
         </Text>
-        <View style={[styles.historyStatusPill, {
-          backgroundColor: isPending ? T.gold + '18' : T.gain + '12',
-        }]}>
-          <Text style={[styles.historyStatus, { color: isPending ? T.gold : T.gain }]}>
+        <View style={[styles.historyStatusPill, { backgroundColor: statusColor + '18' }]}>
+          <Text style={[styles.historyStatus, { color: statusColor }]}>
             {item.status}
           </Text>
         </View>
@@ -410,26 +440,19 @@ const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem
   );
 });
 
-// ─── [B2] Fetch transaction history from real orders endpoint ─────────────────
-async function fetchHistory(): Promise<HistoryItem[]> {
-  try {
-    const res = await api.get('/orders/my-orders');
-    const orders: any[] = res.data.orders ?? [];
-    return orders
-      .filter((o) => o.type === 'DEPOSIT' || o.type === 'WITHDRAW')
-      .map((o) => ({
-        id: o.id ?? o._id ?? String(Math.random()),
-        type: o.type as 'DEPOSIT' | 'WITHDRAW',
-        asset: (o.asset ?? '').replace('USDT', '') || o.currency || 'USDT',
-        amount: String(o.amount ?? '0'),
-        status: o.status ?? 'PENDING',
-        time: o.createdAt
-          ? new Date(o.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-          : '—',
-      }));
-  } catch {
-    return [];
-  }
+// ─── [B2] Transaction history is now sourced from the funding-service via
+// the useFundingHistory hook + fundingStore (see hooks/useFunding.ts).
+// This local mapper just adapts the store's FundingTransaction shape into
+// the HistoryItem shape this screen already renders.
+function toHistoryItems(transactions: ReturnType<typeof useFundingStore.getState>['transactions']): HistoryItem[] {
+  return transactions.map((tx) => ({
+    id: tx.id,
+    type: tx.direction === 'DEPOSIT' ? 'DEPOSIT' : 'WITHDRAW',
+    asset: tx.asset.toUpperCase(),
+    amount: tx.amount,
+    status: tx.status,
+    time: new Date(tx.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+  }));
 }
 
 // ─── Main screen ───────────────────────────────────────────────────────────────
@@ -446,19 +469,11 @@ export default function Wallet() {
   const [modalMode, setModalMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [modalVisible, setModalVisible] = useState(false);
   const [activeSection, setActiveSection] = useState<'assets' | 'history'>('assets');
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Load transaction history when the history tab is first opened
-  useEffect(() => {
-    if (activeSection === 'history' && history.length === 0) {
-      setHistoryLoading(true);
-      fetchHistory().then((items) => {
-        setHistory(items);
-        setHistoryLoading(false);
-      });
-    }
-  }, [activeSection]);
+  // [B2] Real funding history via React Query + fundingStore
+  const { isLoading: historyLoading, refetch: refetchHistory } = useFundingHistory();
+  const transactions = useFundingStore((s) => s.transactions);
+  const history = useMemo(() => toHistoryItems(transactions), [transactions]);
 
   // [P5] Derive assetList from store — only recomputes when balances changes
   const assetList = useMemo(() =>
@@ -482,14 +497,8 @@ export default function Wallet() {
   // After a successful deposit/withdraw, refetch balance and history
   const onFundingSuccess = useCallback(() => {
     refetch();
-    if (activeSection === 'history') {
-      setHistoryLoading(true);
-      fetchHistory().then((items) => {
-        setHistory(items);
-        setHistoryLoading(false);
-      });
-    }
-  }, [refetch, activeSection]);
+    refetchHistory();
+  }, [refetch, refetchHistory]);
 
   const onRefresh = useCallback(() => { refetch(); }, [refetch]);
 

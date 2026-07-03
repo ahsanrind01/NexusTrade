@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { db } from '../config/db';
 import { fundingTransactions } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getKafkaProducer } from '../config/kafka';
 
@@ -120,7 +120,6 @@ export const simulateCryptoDeposit = async (req: Request, res: Response) => {
   }
 };
 
-//  WITHDRAWAL INTENT
 
 export const createWithdrawalIntent = async (req: Request, res: Response) => {
   try {
@@ -184,6 +183,24 @@ export const createWithdrawalIntent = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('Error creating withdrawal intent:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+
+export const getMyTransactions = async (req: Request, res: Response) => {
+  try {
+    const userId = req.headers['x-user-id'] as string;
+
+    const transactions = await db
+      .select()
+      .from(fundingTransactions)
+      .where(eq(fundingTransactions.userId, userId))
+      .orderBy(desc(fundingTransactions.createdAt));
+
+    return res.status(200).json({ success: true, transactions });
+  } catch (error) {
+    console.error('Error fetching funding transactions:', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 };

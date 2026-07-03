@@ -17,14 +17,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useMarketSocket } from '../../hooks/useMarketSocket';
-import { useAuthStore } from '../../stores/authStore';
+import { useWallet } from '../../hooks/useWallet';
+import { useWalletStore } from '../../stores/walletStore';
+import { useMyOrders, useMyTrades, usePlaceOrder, useCancelOrder } from '../../hooks/useOrders';
+import { useOrderStore, Trade as TradeFill, TradeRole } from '../../stores/orderStore';
 
 // ─── Blur fallback ────────────────────────────────────────────────────────────
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch { BlurView = null; }
 
 const { width } = Dimensions.get('window');
-const API_BASE = 'http://localhost:3000/api';
 
 // ─── Design tokens (identical to Home) ───────────────────────────────────────
 const T = {
@@ -82,9 +84,7 @@ interface Order {
   createdAt: string;
 }
 
-interface WalletBalance {
-  [asset: string]: string;
-}
+// Wallet balances are now sourced from stores/walletStore (WalletBalance is defined there).
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 // memo: GlassPanel is purely presentational; without memo it re-renders (and
@@ -257,7 +257,16 @@ function MiniOrderBook({ symbol, currentPrice }: { symbol: string; currentPrice:
 // ─── Order row ────────────────────────────────────────────────────────────────
 // memo: `order` objects are stable between renders unless orders are
 // re-fetched, so this only needs to re-render when its own order changes.
-const OrderRow = memo(function OrderRow({ order, index }: { order: Order; index: number }) {
+// `onCancel` / `cancelling` let the parent own the DELETE /orders/:orderId
+// mutation (via useCancelOrder) while this component stays presentational.
+const OrderRow = memo(function OrderRow({
+  order, index, onCancel, cancelling,
+}: {
+  order: Order;
+  index: number;
+  onCancel: (orderId: string) => void;
+  cancelling: boolean;
+}) {
   const statusColor: Record<OrderStatus, string> = {
     PENDING: T.gold,
     FILLED: T.gain,
@@ -267,6 +276,7 @@ const OrderRow = memo(function OrderRow({ order, index }: { order: Order; index:
   const sideColor = order.side === 'BUY' ? T.gain : T.loss;
   const price = parseFloat(order.price);
   const amount = parseFloat(order.amount);
+  const isCancellable = order.status === 'PENDING' || order.status === 'PARTIAL';
 
   return (
     <Animated.View entering={FadeInDown.delay(Math.min(index, 14) * 25).springify().damping(18)} style={styles.orderRow}>
@@ -285,6 +295,52 @@ const OrderRow = memo(function OrderRow({ order, index }: { order: Order; index:
         </View>
         <Text style={styles.orderTime}>
           {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </Text>
+      </View>
+      {isCancellable && (
+        <TouchableOpacity
+          onPress={() => onCancel(order.id)}
+          disabled={cancelling}
+          style={styles.cancelBtn}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          {cancelling ? (
+            <ActivityIndicator size="small" color={T.loss} />
+          ) : (
+            <Text style={styles.cancelBtnText}>✕</Text>
+          )}
+        </TouchableOpacity>
+      )}
+    </Animated.View>
+  );
+});
+
+// ─── Trade (fill) row ─────────────────────────────────────────────────────────
+// memo: same rationale as OrderRow — trade objects are stable between
+// GET /orders/my-trades refetches.
+const TradeRow = memo(function TradeRow({ trade, index }: { trade: TradeFill; index: number }) {
+  const roleColor: Record<TradeRole, string> = { MAKER: T.accent, TAKER: T.gold };
+  const sideColor = trade.side === 'BUY' ? T.gain : T.loss;
+  const price = parseFloat(trade.price);
+  const amount = parseFloat(trade.amount);
+
+  return (
+    <Animated.View entering={FadeInDown.delay(Math.min(index, 14) * 25).springify().damping(18)} style={styles.orderRow}>
+      <View style={[styles.orderSideBadge, { backgroundColor: sideColor + '18', borderColor: sideColor + '35' }]}>
+        <Text style={[styles.orderSideText, { color: sideColor }]}>{trade.side}</Text>
+      </View>
+      <View style={{ flex: 1, marginLeft: 10 }}>
+        <Text style={styles.orderAsset}>{trade.asset.replace('USDT', '')} / USDT</Text>
+        <Text style={styles.orderMeta}>
+          {amount.toFixed(4)} @ ${price >= 1000 ? price.toLocaleString('en-US', { maximumFractionDigits: 2 }) : price.toFixed(4)}
+        </Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <View style={[styles.statusBadge, { backgroundColor: roleColor[trade.role] + '18' }]}>
+          <Text style={[styles.statusText, { color: roleColor[trade.role] }]}>{trade.role}</Text>
+        </View>
+        <Text style={styles.orderTime}>
+          {new Date(trade.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </Text>
       </View>
     </Animated.View>
@@ -322,7 +378,6 @@ const AmbientField = memo(function AmbientField() {
 // ─── Main Trade Screen ────────────────────────────────────────────────────────
 export default function Trade() {
   const insets = useSafeAreaInsets();
-  const token = useAuthStore((s) => s.token);
 
   useMarketSocket();
 
@@ -331,12 +386,37 @@ export default function Trade() {
   const [side, setSide] = useState<OrderSide>('BUY');
   const [priceInput, setPriceInput] = useState('');
   const [amountInput, setAmountInput] = useState('');
-  const [activeTab, setActiveTab] = useState<'trade' | 'orders'>('trade');
-  const [wallet, setWallet] = useState<WalletBalance>({});
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [activeTab, setActiveTab] = useState<'trade' | 'orders' | 'trades'>('trade');
   const [submitSuccess, setSubmitSuccess] = useState(false);
+
+  // ── Wallet & orders, via the shared hooks/stores (same ones the Wallet
+  // screen uses) instead of ad-hoc fetch() calls with a manually attached
+  // token — the `api` client already injects auth from authStore.
+  const { refetch: refetchWallet } = useWallet();
+  const walletBalances = useWalletStore((s) => s.balances);
+
+  const { isLoading: loadingOrders, refetch: refetchOrders } = useMyOrders();
+  const orders = useOrderStore((s) => s.orders);
+
+  const { isLoading: loadingTrades, refetch: refetchTrades } = useMyTrades();
+  const trades = useOrderStore((s) => s.trades);
+
+  const placeOrder = usePlaceOrder();
+  const submitting = placeOrder.isPending;
+
+  // DELETE /orders/:orderId — tracked per-order so only the row being
+  // cancelled shows a spinner, not the whole list.
+  const cancelOrder = useCancelOrder();
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const handleCancelOrder = useCallback((orderId: string) => {
+    setCancellingId(orderId);
+    cancelOrder.mutate(orderId, {
+      onError: (err: any) => {
+        Alert.alert('Cancel Failed', err.response?.data?.error ?? 'Could not cancel this order.');
+      },
+      onSettled: () => setCancellingId(null),
+    });
+  }, [cancelOrder]);
 
   // Selected pair's live price and connection flag, each scoped narrowly.
   const selectedLivePrice = useMarketStore((s) => s.prices[selectedPair.symbol]?.price ?? 0);
@@ -362,33 +442,9 @@ export default function Trade() {
     }
   }, [selectedLivePrice]);
 
-  // ── Fetch wallet & orders ──────────────────────────────────────────────────
-  const fetchWallet = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/wallet/balance`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (data.success) setWallet(data.balance ?? {});
-    } catch {}
-  }, [token]);
-
-  const fetchOrders = useCallback(async () => {
-    setLoadingOrders(true);
-    try {
-      const res = await fetch(`${API_BASE}/orders/my-orders`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (data.success) setOrders(data.orders ?? []);
-    } catch {}
-    setLoadingOrders(false);
-  }, [token]);
-
-  useEffect(() => {
-    fetchWallet();
-    fetchOrders();
-  }, [fetchWallet, fetchOrders]);
+  const fetchWallet = useCallback(() => { refetchWallet(); }, [refetchWallet]);
+  const fetchOrders = useCallback(() => { refetchOrders(); }, [refetchOrders]);
+  const fetchTrades = useCallback(() => { refetchTrades(); }, [refetchTrades]);
 
   // ── Computed ───────────────────────────────────────────────────────────────
   const totalValue = useMemo(() => {
@@ -397,8 +453,8 @@ export default function Trade() {
     return (p * a).toFixed(2);
   }, [priceInput, amountInput]);
 
-  const usdtBalance = parseFloat(wallet['USDT'] ?? wallet['usdt'] ?? '0') || 0;
-  const baseBalance = parseFloat(wallet[selectedPair.base] ?? wallet[selectedPair.base.toLowerCase()] ?? '0') || 0;
+  const usdtBalance = walletBalances['USDT'] ?? 0;
+  const baseBalance = walletBalances[selectedPair.base] ?? 0;
 
   const quickAmountPcts = useMemo(() => [0.25, 0.5, 0.75, 1.0], []);
 
@@ -422,38 +478,15 @@ export default function Trade() {
       return;
     }
 
-    setSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE}/orders/place`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          asset: selectedPair.symbol,
-          side,
-          price,
-          amount,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (data.success) {
-        setSubmitSuccess(true);
-        setAmountInput('');
-        setTimeout(() => setSubmitSuccess(false), 2000);
-        await fetchOrders();
-        await fetchWallet();
-      } else {
-        Alert.alert('Order Failed', data.error ?? 'Something went wrong.');
-      }
-    } catch (err) {
-      Alert.alert('Network Error', 'Could not reach the order service.');
+      await placeOrder.mutateAsync({ asset: selectedPair.symbol, side, price, amount });
+      setSubmitSuccess(true);
+      setAmountInput('');
+      setTimeout(() => setSubmitSuccess(false), 2000);
+    } catch (err: any) {
+      Alert.alert('Order Failed', err.response?.data?.error ?? 'Could not reach the order service.');
     }
-    setSubmitting(false);
-  }, [priceInput, amountInput, token, selectedPair.symbol, side, fetchOrders, fetchWallet]);
+  }, [priceInput, amountInput, selectedPair.symbol, side, placeOrder]);
 
   const handlePairSelect = useCallback((pair: typeof PAIRS[0]) => {
     setSelectedPair(pair);
@@ -482,8 +515,13 @@ export default function Trade() {
 
   // ── Orders list rendering (FlatList) ──────────────────────────────────────
   const renderOrderItem = useCallback(({ item, index }: ListRenderItemInfo<Order>) => (
-    <OrderRow order={item} index={index} />
-  ), []);
+    <OrderRow
+      order={item}
+      index={index}
+      onCancel={handleCancelOrder}
+      cancelling={cancellingId === item.id}
+    />
+  ), [handleCancelOrder, cancellingId]);
   const orderKeyExtractor = useCallback((item: Order) => item.id, []);
 
   const OrdersHeader = useMemo(() => (
@@ -510,6 +548,37 @@ export default function Trade() {
       </View>
     )
   ), [loadingOrders]);
+
+  // ── Trades (fills) list rendering — GET /orders/my-trades ──────────────────
+  const renderTradeItem = useCallback(({ item, index }: ListRenderItemInfo<TradeFill>) => (
+    <TradeRow trade={item} index={index} />
+  ), []);
+  const tradeKeyExtractor = useCallback((item: TradeFill) => item.id, []);
+
+  const TradesHeader = useMemo(() => (
+    <View style={styles.ordersHeader}>
+      <View style={styles.sectionAccentBar} />
+      <Text style={styles.ordersTitle}>Trade History</Text>
+      <TouchableOpacity onPress={fetchTrades} style={styles.refreshBtn}>
+        <Text style={styles.refreshBtnText}>↻ Refresh</Text>
+      </TouchableOpacity>
+    </View>
+  ), [fetchTrades]);
+
+  const TradesEmpty = useMemo(() => (
+    loadingTrades ? (
+      <View style={styles.loadingState}>
+        <ActivityIndicator color={T.accent} />
+        <Text style={styles.loadingText}>Fetching trades...</Text>
+      </View>
+    ) : (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyIcon}>◈</Text>
+        <Text style={styles.emptyText}>No fills yet</Text>
+        <Text style={styles.emptySubText}>Executed trades will appear here</Text>
+      </View>
+    )
+  ), [loadingTrades]);
 
   return (
     <View style={styles.root}>
@@ -589,11 +658,11 @@ export default function Trade() {
               </GlassPanel>
             </Animated.View>
 
-            {/* ── Tab bar: Trade / Orders ───────────────────────── */}
+            {/* ── Tab bar: Trade / Orders / Trades ─────────────── */}
             <Animated.View entering={FadeInDown.delay(110).springify().damping(18)} style={styles.tabBarWrap}>
               <GlassPanel style={styles.tabBar}>
                 <View style={styles.tabsGroup}>
-                  {(['trade', 'orders'] as const).map((t) => (
+                  {(['trade', 'orders', 'trades'] as const).map((t) => (
                     <TouchableOpacity
                       key={t}
                       onPress={() => setActiveTab(t)}
@@ -607,7 +676,11 @@ export default function Trade() {
                         />
                       )}
                       <Text style={[styles.tabBtnText, activeTab === t && { color: '#fff' }]}>
-                        {t === 'trade' ? 'Place Order' : `My Orders ${orders.length > 0 ? `(${orders.length})` : ''}`}
+                        {t === 'trade'
+                          ? 'Place Order'
+                          : t === 'orders'
+                          ? `Orders ${orders.length > 0 ? `(${orders.length})` : ''}`
+                          : `Trades ${trades.length > 0 ? `(${trades.length})` : ''}`}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -770,6 +843,21 @@ export default function Trade() {
                 keyExtractor={orderKeyExtractor}
                 ListHeaderComponent={OrdersHeader}
                 ListEmptyComponent={OrdersEmpty}
+                scrollEnabled={false}
+                initialNumToRender={10}
+                maxToRenderPerBatch={8}
+                windowSize={5}
+                removeClippedSubviews={Platform.OS === 'android'}
+              />
+            </View>
+
+            <View style={activeTab === 'trades' ? { marginTop: 6 } : styles.hidden}>
+              <FlatList
+                data={trades}
+                renderItem={renderTradeItem}
+                keyExtractor={tradeKeyExtractor}
+                ListHeaderComponent={TradesHeader}
+                ListEmptyComponent={TradesEmpty}
                 scrollEnabled={false}
                 initialNumToRender={10}
                 maxToRenderPerBatch={8}
@@ -946,8 +1034,14 @@ const styles = StyleSheet.create({
   orderAsset: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
   orderMeta: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
   statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginBottom: 3 },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
+  statusTextt: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
   orderTime: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer },
+  cancelBtn: {
+    marginLeft: 10, width: 26, height: 26, borderRadius: 13,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: T.lossDim, borderWidth: 1, borderColor: 'rgba(255,107,122,0.3)',
+  },
+  cancelBtnText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.loss },
 
   // States
   loadingState: { paddingVertical: 40, alignItems: 'center', gap: 12 },

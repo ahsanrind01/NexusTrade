@@ -74,7 +74,10 @@ constants/
   config.ts
   typography.ts
 hooks/
+  useFunding.ts
   useMarketSocket.ts
+  useOrders.ts
+  useProfile.ts
   useTicker24h.ts
   useWallet.ts
 lib/
@@ -82,7 +85,9 @@ lib/
   queryClient.ts
 stores/
   authStore.ts
+  fundingStore.ts
   marketStore.ts
+  orderStore.ts
   walletStore.ts
 .gitignore
 AGENTS.md
@@ -661,7 +666,7 @@ export default function Register() {
     buttonPress.value = withSpring(1, { damping: 14 });
     setLoading(true);
     try {
-      const res = await api.post('/auth/register', { name: fullName, email, password });
+      const res = await api.post('/auth/signup', { name: fullName, email, password });
       const { token, user } = res.data;
       setAuth(token, user);
       router.replace('/(tabs)');
@@ -3580,11 +3585,11 @@ export default function Market() {
 </file>
 
 <file path="app/(tabs)/profile.tsx">
-import { useState, useCallback, useMemo, memo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Dimensions, TextInput, KeyboardAvoidingView, Platform,
-  Modal, Pressable,
+  Modal, Pressable, Alert,
 } from 'react-native';
 import Animated, {
   FadeIn, FadeInDown, FadeInUp, FadeOut,
@@ -3596,7 +3601,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { FontFamily } from '../../constants/typography';
-import { useAuthStore } from '../../stores/authStore';
+import {
+  useProfile, useUpdateProfile, useChangePassword,
+  useSendPhoneOtp, useVerifyPhoneOtp, useLogout,
+} from '../../hooks/useProfile';
 
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
@@ -3627,35 +3635,7 @@ const T = {
   textTer: '#5B6072',
 };
 
-// ─────────────────────────────────────────────────────────────
-// MOCK DATA — matches the users table shape from auth-service
-// (id, name, email, provider, profileImage, phoneNumber,
-// phoneVerified, createdAt). Replace with GET /api/auth/profile/:userId
-// in the next step.
-// ─────────────────────────────────────────────────────────────
 type Provider = 'LOCAL' | 'GOOGLE';
-
-interface ProfileData {
-  id: string;
-  name: string;
-  email: string;
-  provider: Provider;
-  profileImage: string | null;
-  phoneNumber: string | null;
-  phoneVerified: boolean;
-  createdAt: string;
-}
-
-const MOCK_PROFILE: ProfileData = {
-  id: 'a3f9c1e2-8b7d-4f6a-9c2e-1d5b8a3f9c1e',
-  name: 'Ahsan Rind',
-  email: 'ahsan@nexustrade.io',
-  provider: 'LOCAL',
-  profileImage: null,
-  phoneNumber: null,
-  phoneVerified: false,
-  createdAt: '2025-11-02T00:00:00.000Z',
-};
 
 // ─────────────────────────────────────────────────────────────
 // SHARED PRIMITIVES (same contract as dashboard's)
@@ -3752,7 +3732,7 @@ const Avatar = memo(function Avatar({ name, onEdit }: { name: string; onEdit: ()
         />
       </Animated.View>
       <View style={styles.avatarInner}>
-        <Text style={styles.avatarInitials}>{getInitials(name)}</Text>
+        <Text style={styles.avatarInitials}>{getInitials(name || 'Trader')}</Text>
       </View>
       <Pressy onPress={onEdit} style={styles.avatarEditBtn}>
         <LinearGradient colors={[T.accentDeep, T.violet]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
@@ -3896,8 +3876,8 @@ function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType,
 
 function SheetPrimaryButton({ label, onPress, loading }: { label: string; onPress: () => void; loading?: boolean }) {
   return (
-    <Pressy onPress={onPress} style={{ marginTop: 6 }}>
-      <View style={styles.sheetPrimaryBtn}>
+    <Pressy onPress={loading ? undefined : onPress} style={{ marginTop: 6 }}>
+      <View style={[styles.sheetPrimaryBtn, loading && { opacity: 0.7 }]}>
         <LinearGradient colors={[T.accentDeep, T.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />
         <Text style={styles.sheetPrimaryBtnText}>{loading ? 'Please wait…' : label}</Text>
       </View>
@@ -3911,11 +3891,27 @@ function SheetPrimaryButton({ label, onPress, loading }: { label: string; onPres
 export default function Profile() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const authUser = useAuthStore((s) => s.user);
 
-  // TODO(step 2): replace MOCK_PROFILE with data from
-  // GET /api/auth/profile/:userId, seeded from authUser?.id
-  const [profile, setProfile] = useState<ProfileData>(MOCK_PROFILE);
+  const { profile: user, isLoading: profileLoading } = useProfile();
+  const updateProfileMutation = useUpdateProfile();
+  const changePasswordMutation = useChangePassword();
+  const sendOtpMutation = useSendPhoneOtp();
+  const verifyOtpMutation = useVerifyPhoneOtp();
+  const logoutMutation = useLogout();
+
+  // Normalized view of the profile with safe fallbacks while the
+  // GET /auth/profile request is in flight (falls back to what
+  // login/signup already put in authStore).
+  const profile = useMemo(() => ({
+    id: user?.id ?? '',
+    name: user?.name ?? 'Trader',
+    email: user?.email ?? '',
+    provider: (user?.provider ?? 'LOCAL') as Provider,
+    profileImage: user?.profileImage ?? null,
+    phoneNumber: user?.phoneNumber ?? null,
+    phoneVerified: user?.phoneVerified ?? false,
+    createdAt: user?.createdAt ?? new Date().toISOString(),
+  }), [user]);
 
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState(profile.name);
@@ -3931,8 +3927,6 @@ export default function Profile() {
   const [phoneInput, setPhoneInput] = useState(profile.phoneNumber ?? '');
   const [otpInput, setOtpInput] = useState('');
 
-  const [saving, setSaving] = useState(false);
-
   const memberSince = useMemo(() => {
     const d = new Date(profile.createdAt);
     return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
@@ -3942,48 +3936,62 @@ export default function Profile() {
     setEditName(profile.name);
     setEditEmail(profile.email);
     setEditVisible(true);
-  }, [profile]);
+  }, [profile.name, profile.email]);
 
-  // TODO(step 2): wire to PUT /api/auth/profile/:userId
   const handleSaveProfile = useCallback(() => {
-    setSaving(true);
-    setTimeout(() => {
-      setProfile((p) => ({ ...p, name: editName.trim() || p.name, email: editEmail.trim() || p.email }));
-      setSaving(false);
-      setEditVisible(false);
-    }, 500);
-  }, [editName, editEmail]);
+    if (!editName.trim() || !editEmail.trim()) {
+      return Alert.alert('Missing Fields', 'Name and email cannot be empty.');
+    }
+    updateProfileMutation.mutate(
+      { name: editName.trim(), email: editEmail.trim() },
+      {
+        onSuccess: () => setEditVisible(false),
+        onError: (err: any) => Alert.alert('Update Failed', err.response?.data?.error || 'Something went wrong'),
+      }
+    );
+  }, [editName, editEmail, updateProfileMutation]);
 
-  // TODO(step 2): wire to PUT /api/auth/change-password
   const handleChangePassword = useCallback(() => {
-    setSaving(true);
-    setTimeout(() => {
-      setSaving(false);
-      setPwdVisible(false);
-      setCurrentPwd(''); setNewPwd(''); setConfirmPwd('');
-    }, 500);
-  }, []);
+    if (!currentPwd || !newPwd || !confirmPwd) {
+      return Alert.alert('Missing Fields', 'Please fill in all password fields.');
+    }
+    if (newPwd !== confirmPwd) {
+      return Alert.alert('Passwords Don\u2019t Match', 'New password and confirmation must match.');
+    }
+    changePasswordMutation.mutate(
+      { currentPassword: currentPwd, newPassword: newPwd },
+      {
+        onSuccess: () => {
+          setPwdVisible(false);
+          setCurrentPwd(''); setNewPwd(''); setConfirmPwd('');
+        },
+        onError: (err: any) => Alert.alert('Change Failed', err.response?.data?.error || 'Something went wrong'),
+      }
+    );
+  }, [currentPwd, newPwd, confirmPwd, changePasswordMutation]);
 
-  // TODO(step 2): wire to POST /api/auth/phone/send-otp
   const handleSendOtp = useCallback(() => {
-    setSaving(true);
-    setTimeout(() => {
-      setSaving(false);
-      setPhoneStep('otp');
-    }, 500);
-  }, []);
+    if (!phoneInput.trim()) return Alert.alert('Missing Field', 'Enter a phone number first.');
+    sendOtpMutation.mutate(phoneInput.trim(), {
+      onSuccess: () => setPhoneStep('otp'),
+      onError: (err: any) => Alert.alert('Failed to Send OTP', err.response?.data?.error || 'Something went wrong'),
+    });
+  }, [phoneInput, sendOtpMutation]);
 
-  // TODO(step 2): wire to POST /api/auth/phone/verify
   const handleVerifyOtp = useCallback(() => {
-    setSaving(true);
-    setTimeout(() => {
-      setProfile((p) => ({ ...p, phoneNumber: phoneInput, phoneVerified: true }));
-      setSaving(false);
-      setPhoneVisible(false);
-      setPhoneStep('enter');
-      setOtpInput('');
-    }, 500);
-  }, [phoneInput]);
+    if (!otpInput.trim()) return Alert.alert('Missing Field', 'Enter the code we sent you.');
+    verifyOtpMutation.mutate(
+      { phone: phoneInput.trim(), otp: otpInput.trim() },
+      {
+        onSuccess: () => {
+          setPhoneVisible(false);
+          setPhoneStep('enter');
+          setOtpInput('');
+        },
+        onError: (err: any) => Alert.alert('Verification Failed', err.response?.data?.error || 'Something went wrong'),
+      }
+    );
+  }, [phoneInput, otpInput, verifyOtpMutation]);
 
   const closePhoneSheet = useCallback(() => {
     setPhoneVisible(false);
@@ -3991,10 +3999,17 @@ export default function Profile() {
     setOtpInput('');
   }, []);
 
-  // TODO(step 2): wire to auth store logout + clear token / navigate to (auth)/login
   const handleLogout = useCallback(() => {
-    router.replace('/(auth)/login');
-  }, [router]);
+    Alert.alert('Log Out', 'Are you sure you want to log out?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log Out', style: 'destructive', onPress: () => logoutMutation.mutate() },
+    ]);
+  }, [logoutMutation]);
+
+  const saving = updateProfileMutation.isPending;
+  const changingPwd = changePasswordMutation.isPending;
+  const sendingOtp = sendOtpMutation.isPending;
+  const verifyingOtp = verifyOtpMutation.isPending;
 
   return (
     <View style={styles.root}>
@@ -4047,11 +4062,11 @@ export default function Profile() {
               </View>
               <View style={styles.statCell}>
                 <Text style={styles.statCellLabel}>ACCOUNT ID</Text>
-                <Text style={styles.statCellValue}>#{profile.id.slice(0, 6).toUpperCase()}</Text>
+                <Text style={styles.statCellValue}>#{profile.id ? profile.id.slice(0, 6).toUpperCase() : '------'}</Text>
               </View>
               <View style={styles.statCell}>
                 <Text style={styles.statCellLabel}>STATUS</Text>
-                <Text style={[styles.statCellValue, { color: T.gain }]}>Active</Text>
+                <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing…' : 'Active'}</Text>
               </View>
             </View>
           </GlassPanel>
@@ -4127,7 +4142,7 @@ export default function Profile() {
         <SheetInput label="New Password" value={newPwd} onChangeText={setNewPwd} secureTextEntry placeholder="••••••••" />
         <SheetInput label="Confirm New Password" value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry placeholder="••••••••" />
         <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number & a symbol.</Text>
-        <SheetPrimaryButton label="Update Password" onPress={handleChangePassword} loading={saving} />
+        <SheetPrimaryButton label="Update Password" onPress={handleChangePassword} loading={changingPwd} />
       </SheetModal>
 
       {/* ── Phone Verify Sheet ───────────────────────────── */}
@@ -4135,13 +4150,13 @@ export default function Profile() {
         {phoneStep === 'enter' ? (
           <>
             <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+92 300 1234567" keyboardType="phone-pad" />
-            <SheetPrimaryButton label="Send OTP" onPress={handleSendOtp} loading={saving} />
+            <SheetPrimaryButton label="Send OTP" onPress={handleSendOtp} loading={sendingOtp} />
           </>
         ) : (
           <>
             <Text style={styles.sheetHint}>We sent a 6-digit code to {phoneInput}.</Text>
             <SheetInput label="Verification Code" value={otpInput} onChangeText={setOtpInput} placeholder="••••••" keyboardType="number-pad" />
-            <SheetPrimaryButton label="Verify Phone" onPress={handleVerifyOtp} loading={saving} />
+            <SheetPrimaryButton label="Verify Phone" onPress={handleVerifyOtp} loading={verifyingOtp} />
           </>
         )}
       </SheetModal>
@@ -4248,14 +4263,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useMarketSocket } from '../../hooks/useMarketSocket';
-import { useAuthStore } from '../../stores/authStore';
+import { useWallet } from '../../hooks/useWallet';
+import { useWalletStore } from '../../stores/walletStore';
+import { useMyOrders, usePlaceOrder } from '../../hooks/useOrders';
+import { useOrderStore } from '../../stores/orderStore';
 
 // ─── Blur fallback ────────────────────────────────────────────────────────────
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch { BlurView = null; }
 
 const { width } = Dimensions.get('window');
-const API_BASE = 'http://localhost:3000/api';
 
 // ─── Design tokens (identical to Home) ───────────────────────────────────────
 const T = {
@@ -4313,9 +4330,7 @@ interface Order {
   createdAt: string;
 }
 
-interface WalletBalance {
-  [asset: string]: string;
-}
+// Wallet balances are now sourced from stores/walletStore (WalletBalance is defined there).
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 // memo: GlassPanel is purely presentational; without memo it re-renders (and
@@ -4553,7 +4568,6 @@ const AmbientField = memo(function AmbientField() {
 // ─── Main Trade Screen ────────────────────────────────────────────────────────
 export default function Trade() {
   const insets = useSafeAreaInsets();
-  const token = useAuthStore((s) => s.token);
 
   useMarketSocket();
 
@@ -4563,11 +4577,19 @@ export default function Trade() {
   const [priceInput, setPriceInput] = useState('');
   const [amountInput, setAmountInput] = useState('');
   const [activeTab, setActiveTab] = useState<'trade' | 'orders'>('trade');
-  const [wallet, setWallet] = useState<WalletBalance>({});
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [loadingOrders, setLoadingOrders] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+
+  // ── Wallet & orders, via the shared hooks/stores (same ones the Wallet
+  // screen uses) instead of ad-hoc fetch() calls with a manually attached
+  // token — the `api` client already injects auth from authStore.
+  const { refetch: refetchWallet } = useWallet();
+  const walletBalances = useWalletStore((s) => s.balances);
+
+  const { isLoading: loadingOrders, refetch: refetchOrders } = useMyOrders();
+  const orders = useOrderStore((s) => s.orders);
+
+  const placeOrder = usePlaceOrder();
+  const submitting = placeOrder.isPending;
 
   // Selected pair's live price and connection flag, each scoped narrowly.
   const selectedLivePrice = useMarketStore((s) => s.prices[selectedPair.symbol]?.price ?? 0);
@@ -4593,33 +4615,8 @@ export default function Trade() {
     }
   }, [selectedLivePrice]);
 
-  // ── Fetch wallet & orders ──────────────────────────────────────────────────
-  const fetchWallet = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/wallet/balance`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (data.success) setWallet(data.balance ?? {});
-    } catch {}
-  }, [token]);
-
-  const fetchOrders = useCallback(async () => {
-    setLoadingOrders(true);
-    try {
-      const res = await fetch(`${API_BASE}/orders/my-orders`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (data.success) setOrders(data.orders ?? []);
-    } catch {}
-    setLoadingOrders(false);
-  }, [token]);
-
-  useEffect(() => {
-    fetchWallet();
-    fetchOrders();
-  }, [fetchWallet, fetchOrders]);
+  const fetchWallet = useCallback(() => { refetchWallet(); }, [refetchWallet]);
+  const fetchOrders = useCallback(() => { refetchOrders(); }, [refetchOrders]);
 
   // ── Computed ───────────────────────────────────────────────────────────────
   const totalValue = useMemo(() => {
@@ -4628,8 +4625,8 @@ export default function Trade() {
     return (p * a).toFixed(2);
   }, [priceInput, amountInput]);
 
-  const usdtBalance = parseFloat(wallet['USDT'] ?? wallet['usdt'] ?? '0') || 0;
-  const baseBalance = parseFloat(wallet[selectedPair.base] ?? wallet[selectedPair.base.toLowerCase()] ?? '0') || 0;
+  const usdtBalance = walletBalances['USDT'] ?? 0;
+  const baseBalance = walletBalances[selectedPair.base] ?? 0;
 
   const quickAmountPcts = useMemo(() => [0.25, 0.5, 0.75, 1.0], []);
 
@@ -4653,38 +4650,15 @@ export default function Trade() {
       return;
     }
 
-    setSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE}/orders/place`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          asset: selectedPair.symbol,
-          side,
-          price,
-          amount,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (data.success) {
-        setSubmitSuccess(true);
-        setAmountInput('');
-        setTimeout(() => setSubmitSuccess(false), 2000);
-        await fetchOrders();
-        await fetchWallet();
-      } else {
-        Alert.alert('Order Failed', data.error ?? 'Something went wrong.');
-      }
-    } catch (err) {
-      Alert.alert('Network Error', 'Could not reach the order service.');
+      await placeOrder.mutateAsync({ asset: selectedPair.symbol, side, price, amount });
+      setSubmitSuccess(true);
+      setAmountInput('');
+      setTimeout(() => setSubmitSuccess(false), 2000);
+    } catch (err: any) {
+      Alert.alert('Order Failed', err.response?.data?.error ?? 'Could not reach the order service.');
     }
-    setSubmitting(false);
-  }, [priceInput, amountInput, token, selectedPair.symbol, side, fetchOrders, fetchWallet]);
+  }, [priceInput, amountInput, selectedPair.symbol, side, placeOrder]);
 
   const handlePairSelect = useCallback((pair: typeof PAIRS[0]) => {
     setSelectedPair(pair);
@@ -5177,7 +5151,7 @@ const styles = StyleSheet.create({
   orderAsset: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
   orderMeta: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
   statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginBottom: 3 },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
+  statusTextt: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
   orderTime: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer },
 
   // States
@@ -5207,9 +5181,15 @@ import Animated, {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontFamily } from '../../constants/typography';
-import { api } from '../../lib/api';
 import { useWallet } from '../../hooks/useWallet';
 import { useWalletStore } from '../../stores/walletStore';
+import {
+  useFundingHistory,
+  useCreateDepositIntent,
+  useSimulateCryptoDeposit,
+  useCreateWithdrawalIntent,
+} from '../../hooks/useFunding';
+import { useFundingStore } from '../../stores/fundingStore';
 
 // [P6] Evaluated once — avoids conditional require() inside render
 let BlurView: any = null;
@@ -5264,7 +5244,7 @@ type HistoryItem = {
   type: 'DEPOSIT' | 'WITHDRAW';
   asset: string;
   amount: string;
-  status: 'CLEARED' | 'COMPLETED' | 'PENDING' | 'CANCELLED';
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   time: string;
 };
 
@@ -5339,7 +5319,16 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
 }) {
   const [asset, setAsset] = useState<typeof MODAL_ASSETS[number]>('USDT');
   const [amount, setAmount] = useState('');
-  const [loading, setLoading] = useState(false);
+
+  // [B3,B5] Real API calls to the funding service through the gateway,
+  // via React Query mutations (see hooks/useFunding.ts).
+  const createDepositIntent = useCreateDepositIntent();
+  const simulateCryptoDeposit = useSimulateCryptoDeposit();
+  const createWithdrawalIntent = useCreateWithdrawalIntent();
+  const loading =
+    createDepositIntent.isPending ||
+    simulateCryptoDeposit.isPending ||
+    createWithdrawalIntent.isPending;
 
   const translateY = useSharedValue(600);
   const backdropOp = useSharedValue(0);
@@ -5357,30 +5346,45 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: translateY.value }] }));
   const backdropStyle = useAnimatedStyle(() => ({ opacity: backdropOp.value }));
 
-  // [B3,B5] Real API calls to the funding service through the gateway
+  // [B3,B5] Real API calls to the funding service through the gateway.
+  // Deposits go through a two-step flow on the backend: an intent is
+  // created first (POST /funding/deposit/intent); for on-chain assets we
+  // then immediately simulate the confirmation (POST
+  // /funding/deposit/simulate-crypto) since there's no real chain watcher
+  // in this environment. FIAT_STRIPE intents settle via the Stripe
+  // webhook instead, so no follow-up call is needed there.
   const handleSubmit = async () => {
     const parsed = parseFloat(amount);
     if (!amount || isNaN(parsed) || parsed <= 0) {
       Alert.alert('Invalid Amount', 'Please enter a valid amount.');
       return;
     }
-    setLoading(true);
+
+    // [B5] type field: stablecoins are fiat on-ramp, everything else is on-chain
+    const type = FIAT_ASSETS.has(asset) ? 'FIAT_STRIPE' : 'CRYPTO_ETH';
+
     try {
-      // [B5] type field: stablecoins are fiat on-ramp, everything else is on-chain
-      const type = FIAT_ASSETS.has(asset) ? 'FIAT_STRIPE' : 'CRYPTO_ETH';
-      const endpoint = mode === 'deposit' ? '/funding/deposit' : '/funding/withdraw';
-      await api.post(endpoint, { asset, amount, type });
-      Alert.alert(
-        'Success',
-        `${mode === 'deposit' ? 'Deposit' : 'Withdrawal'} request submitted.`
-      );
+      if (mode === 'deposit') {
+        const { transaction } = await createDepositIntent.mutateAsync({ asset, amount, type });
+        if (type === 'CRYPTO_ETH') {
+          await simulateCryptoDeposit.mutateAsync(transaction.id);
+        }
+        Alert.alert('Success', 'Deposit request submitted.');
+      } else {
+        await createWithdrawalIntent.mutateAsync({
+          asset,
+          amount,
+          type,
+          // Mock destination for the on-chain path; a real UI would collect this.
+          destinationAddress: type === 'CRYPTO_ETH' ? '0xUserProvidedDestinationAddress' : undefined,
+        });
+        Alert.alert('Success', 'Withdrawal request submitted.');
+      }
       setAmount('');
       onSuccess();  // trigger a balance refetch
       onClose();
     } catch (err: any) {
       Alert.alert('Failed', err.response?.data?.error || 'Something went wrong');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -5566,7 +5570,9 @@ const AssetCard = memo(function AssetCard({
 // ─── [P3] HistoryRow — memo: history items are immutable after fetch ───────────
 const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
   const isDeposit = item.type === 'DEPOSIT';
-  const isPending = item.status === 'PENDING';
+  const isPending = item.status === 'PENDING' || item.status === 'PROCESSING';
+  const isFailed = item.status === 'FAILED';
+  const statusColor = isFailed ? T.loss : isPending ? T.gold : T.gain;
 
   return (
     <Animated.View entering={FadeInDown.delay(Math.min(index, 8) * 50).springify().damping(18)} style={styles.historyRow}>
@@ -5591,10 +5597,8 @@ const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem
         <Text style={[styles.historyAmount, { color: isDeposit ? T.gain : T.loss }]}>
           {isDeposit ? '+' : '-'}{item.amount} {item.asset}
         </Text>
-        <View style={[styles.historyStatusPill, {
-          backgroundColor: isPending ? T.gold + '18' : T.gain + '12',
-        }]}>
-          <Text style={[styles.historyStatus, { color: isPending ? T.gold : T.gain }]}>
+        <View style={[styles.historyStatusPill, { backgroundColor: statusColor + '18' }]}>
+          <Text style={[styles.historyStatus, { color: statusColor }]}>
             {item.status}
           </Text>
         </View>
@@ -5603,26 +5607,19 @@ const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem
   );
 });
 
-// ─── [B2] Fetch transaction history from real orders endpoint ─────────────────
-async function fetchHistory(): Promise<HistoryItem[]> {
-  try {
-    const res = await api.get('/orders/my-orders');
-    const orders: any[] = res.data.orders ?? [];
-    return orders
-      .filter((o) => o.type === 'DEPOSIT' || o.type === 'WITHDRAW')
-      .map((o) => ({
-        id: o.id ?? o._id ?? String(Math.random()),
-        type: o.type as 'DEPOSIT' | 'WITHDRAW',
-        asset: (o.asset ?? '').replace('USDT', '') || o.currency || 'USDT',
-        amount: String(o.amount ?? '0'),
-        status: o.status ?? 'PENDING',
-        time: o.createdAt
-          ? new Date(o.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-          : '—',
-      }));
-  } catch {
-    return [];
-  }
+// ─── [B2] Transaction history is now sourced from the funding-service via
+// the useFundingHistory hook + fundingStore (see hooks/useFunding.ts).
+// This local mapper just adapts the store's FundingTransaction shape into
+// the HistoryItem shape this screen already renders.
+function toHistoryItems(transactions: ReturnType<typeof useFundingStore.getState>['transactions']): HistoryItem[] {
+  return transactions.map((tx) => ({
+    id: tx.id,
+    type: tx.direction === 'DEPOSIT' ? 'DEPOSIT' : 'WITHDRAW',
+    asset: tx.asset.toUpperCase(),
+    amount: tx.amount,
+    status: tx.status,
+    time: new Date(tx.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+  }));
 }
 
 // ─── Main screen ───────────────────────────────────────────────────────────────
@@ -5639,19 +5636,11 @@ export default function Wallet() {
   const [modalMode, setModalMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [modalVisible, setModalVisible] = useState(false);
   const [activeSection, setActiveSection] = useState<'assets' | 'history'>('assets');
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Load transaction history when the history tab is first opened
-  useEffect(() => {
-    if (activeSection === 'history' && history.length === 0) {
-      setHistoryLoading(true);
-      fetchHistory().then((items) => {
-        setHistory(items);
-        setHistoryLoading(false);
-      });
-    }
-  }, [activeSection]);
+  // [B2] Real funding history via React Query + fundingStore
+  const { isLoading: historyLoading, refetch: refetchHistory } = useFundingHistory();
+  const transactions = useFundingStore((s) => s.transactions);
+  const history = useMemo(() => toHistoryItems(transactions), [transactions]);
 
   // [P5] Derive assetList from store — only recomputes when balances changes
   const assetList = useMemo(() =>
@@ -5675,14 +5664,8 @@ export default function Wallet() {
   // After a successful deposit/withdraw, refetch balance and history
   const onFundingSuccess = useCallback(() => {
     refetch();
-    if (activeSection === 'history') {
-      setHistoryLoading(true);
-      fetchHistory().then((items) => {
-        setHistory(items);
-        setHistoryLoading(false);
-      });
-    }
-  }, [refetch, activeSection]);
+    refetchHistory();
+  }, [refetch, refetchHistory]);
 
   const onRefresh = useCallback(() => { refetch(); }, [refetch]);
 
@@ -6092,9 +6075,15 @@ export default function RootLayout() {
 
 <file path="app/index.tsx">
 import { Redirect } from 'expo-router';
+import { useAuthStore } from '../stores/authStore';
 
 export default function Index() {
-  return <Redirect href="/(tabs)" />;
+  const hasHydrated = useAuthStore((s) => s.hasHydrated);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
+  if (!hasHydrated) return null;
+
+  return <Redirect href={isAuthenticated ? '/(tabs)' : '/(auth)/login'} />;
 }
 </file>
 
@@ -6150,6 +6139,162 @@ export const FontSize = {
   xxxl: 32,
   display: 42,
 };
+</file>
+
+<file path="hooks/useFunding.ts">
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { api } from '../lib/api';
+import {
+  useFundingStore,
+  FundingTransaction,
+  FundingType,
+  FundingDirection,
+} from '../stores/fundingStore';
+
+interface DepositIntentInput {
+  asset: string;
+  amount: string | number;
+  type: FundingType;
+}
+
+interface DepositIntentResponse {
+  success: boolean;
+  message: string;
+  transaction: {
+    id: string;
+    status: string;
+    type: string;
+    amount: string;
+    asset: string;
+    stripeCheckoutUrl: string | null;
+    cryptoDepositAddress: string | null;
+  };
+}
+
+interface WithdrawIntentInput {
+  asset: string;
+  amount: string | number;
+  type: FundingType;
+  destinationAddress?: string;
+}
+
+interface WithdrawIntentResponse {
+  success: boolean;
+  message: string;
+  transaction: {
+    id: string;
+    status: string;
+    direction: string;
+    amount: string;
+    asset: string;
+  };
+}
+
+async function fetchFundingHistory() {
+  const res = await api.get('/funding/transactions');
+  return res.data.transactions as FundingTransaction[];
+}
+
+async function createDepositIntentRequest(input: DepositIntentInput) {
+  const res = await api.post('/funding/deposit/intent', input);
+  return res.data as DepositIntentResponse;
+}
+
+async function simulateCryptoDepositRequest(transactionId: string) {
+  const res = await api.post('/funding/deposit/simulate-crypto', { transactionId });
+  return res.data as { success: boolean; status: string };
+}
+
+async function createWithdrawalIntentRequest(input: WithdrawIntentInput) {
+  const res = await api.post('/funding/withdraw/intent', input);
+  return res.data as WithdrawIntentResponse;
+}
+
+// GET /funding/transactions — deposit & withdrawal history for the wallet screen.
+export function useFundingHistory() {
+  const setTransactions = useFundingStore((s) => s.setTransactions);
+
+  const query = useQuery({
+    queryKey: ['funding', 'transactions'],
+    queryFn: fetchFundingHistory,
+    staleTime: 1000 * 20,
+    retry: 2,
+  });
+
+  useEffect(() => {
+    if (query.data) setTransactions(query.data);
+  }, [query.data]);
+
+  return query;
+}
+
+// POST /funding/deposit/intent — starts a deposit. For FIAT_STRIPE this
+// returns a checkout URL; for CRYPTO_ETH it returns a deposit address and
+// the caller can follow up with useSimulateCryptoDeposit once "sent".
+export function useCreateDepositIntent() {
+  const queryClient = useQueryClient();
+  const setPendingDepositId = useFundingStore((s) => s.setPendingDepositId);
+  const addTransaction = useFundingStore((s) => s.addTransaction);
+
+  return useMutation({
+    mutationFn: createDepositIntentRequest,
+    onSuccess: (data) => {
+      setPendingDepositId(data.transaction.id);
+      addTransaction({
+        id: data.transaction.id,
+        direction: 'DEPOSIT',
+        type: data.transaction.type as FundingType,
+        asset: data.transaction.asset,
+        amount: data.transaction.amount,
+        status: data.transaction.status as FundingTransaction['status'],
+        createdAt: new Date().toISOString(),
+      });
+      queryClient.invalidateQueries({ queryKey: ['funding', 'transactions'] });
+    },
+  });
+}
+
+// POST /funding/deposit/simulate-crypto — confirms a pending CRYPTO_ETH
+// deposit (stand-in for on-chain confirmation) and triggers the wallet
+// balance update via Kafka on the backend.
+export function useSimulateCryptoDeposit() {
+  const queryClient = useQueryClient();
+  const updateTransactionStatus = useFundingStore((s) => s.updateTransactionStatus);
+
+  return useMutation({
+    mutationFn: simulateCryptoDepositRequest,
+    onSuccess: (_data, transactionId) => {
+      updateTransactionStatus(transactionId, 'COMPLETED');
+      queryClient.invalidateQueries({ queryKey: ['funding', 'transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['wallet-balance'] });
+    },
+  });
+}
+
+// POST /funding/withdraw/intent — requests a withdrawal; the wallet-service
+// validates and debits the balance asynchronously via Kafka.
+export function useCreateWithdrawalIntent() {
+  const queryClient = useQueryClient();
+  const addTransaction = useFundingStore((s) => s.addTransaction);
+
+  return useMutation({
+    mutationFn: createWithdrawalIntentRequest,
+    onSuccess: (data, variables) => {
+      addTransaction({
+        id: data.transaction.id,
+        direction: data.transaction.direction as FundingDirection,
+        type: variables.type,
+        asset: data.transaction.asset,
+        amount: data.transaction.amount,
+        status: data.transaction.status as FundingTransaction['status'],
+        createdAt: new Date().toISOString(),
+      });
+      queryClient.invalidateQueries({ queryKey: ['funding', 'transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['wallet-balance'] });
+    },
+  });
+}
 </file>
 
 <file path="hooks/useMarketSocket.ts">
@@ -6262,6 +6407,245 @@ export function useMarketSocket() {
       socketRef.current = null;
     };
   }, []);
+}
+</file>
+
+<file path="hooks/useOrders.ts">
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { api } from '../lib/api';
+import { useOrderStore, Order, Trade, OrderSide } from '../stores/orderStore';
+
+async function fetchMyOrders() {
+  const res = await api.get('/orders/my-orders');
+  return res.data.orders as Order[];
+}
+
+async function fetchMyTrades() {
+  const res = await api.get('/orders/my-trades');
+  return res.data.trades as Trade[];
+}
+
+interface PlaceOrderInput {
+  asset: string;
+  side: OrderSide;
+  price: number;
+  amount: number;
+}
+
+async function placeOrderRequest(input: PlaceOrderInput) {
+  const res = await api.post('/orders/place', input);
+  return res.data as { success: boolean; orderId: string };
+}
+
+async function cancelOrderRequest(orderId: string) {
+  const res = await api.delete(`/orders/${orderId}`);
+  return res.data as { success: boolean; order: Order };
+}
+
+// GET /orders/my-orders — the source of truth for a user's open + historical orders.
+export function useMyOrders() {
+  const setOrders = useOrderStore((s) => s.setOrders);
+
+  const query = useQuery({
+    queryKey: ['orders', 'my-orders'],
+    queryFn: fetchMyOrders,
+    staleTime: 1000 * 15,
+    refetchInterval: 1000 * 20,
+    retry: 2,
+  });
+
+  useEffect(() => {
+    if (query.data) setOrders(query.data);
+  }, [query.data]);
+
+  return query;
+}
+
+// GET /orders/my-trades — fills/executions, separate from the resting orders list.
+export function useMyTrades() {
+  const setTrades = useOrderStore((s) => s.setTrades);
+
+  const query = useQuery({
+    queryKey: ['orders', 'my-trades'],
+    queryFn: fetchMyTrades,
+    staleTime: 1000 * 20,
+    retry: 2,
+  });
+
+  useEffect(() => {
+    if (query.data) setTrades(query.data);
+  }, [query.data]);
+
+  return query;
+}
+
+// POST /orders/place — submits a limit order to the matching engine via Kafka.
+export function usePlaceOrder() {
+  const queryClient = useQueryClient();
+  const upsertOrder = useOrderStore((s) => s.upsertOrder);
+
+  return useMutation({
+    mutationFn: placeOrderRequest,
+    onSuccess: (data, variables) => {
+      // Optimistic row so the UI reflects the order immediately; the next
+      // my-orders refetch will replace it with the server's full record.
+      upsertOrder({
+        id: data.orderId,
+        userId: '',
+        asset: variables.asset,
+        side: variables.side,
+        price: String(variables.price),
+        amount: String(variables.amount),
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+      });
+      queryClient.invalidateQueries({ queryKey: ['orders', 'my-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['wallet-balance'] });
+    },
+  });
+}
+
+// DELETE /orders/:orderId — cancels a resting order.
+export function useCancelOrder() {
+  const queryClient = useQueryClient();
+  const removeOrder = useOrderStore((s) => s.removeOrder);
+
+  return useMutation({
+    mutationFn: cancelOrderRequest,
+    onSuccess: (_data, orderId) => {
+      removeOrder(orderId);
+      queryClient.invalidateQueries({ queryKey: ['orders', 'my-orders'] });
+    },
+  });
+}
+</file>
+
+<file path="hooks/useProfile.ts">
+import { useEffect } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { router } from 'expo-router';
+import { api } from '../lib/api';
+import { useAuthStore, User } from '../stores/authStore';
+
+const PROFILE_KEY = ['profile'] as const;
+
+async function fetchProfile(): Promise<User> {
+  const res = await api.get('/auth/profile');
+  return res.data.user;
+}
+
+/**
+ * Fetches the authenticated user's full profile (provider, phone,
+ * verification status, etc — fields /login and /signup don't return)
+ * and keeps authStore's user in sync so the rest of the app sees it too.
+ */
+export function useProfile() {
+  const token = useAuthStore((s) => s.token);
+  const fallbackUser = useAuthStore((s) => s.user);
+  const updateUser = useAuthStore((s) => s.updateUser);
+
+  const query = useQuery({
+    queryKey: PROFILE_KEY,
+    queryFn: fetchProfile,
+    enabled: !!token,
+    staleTime: 1000 * 60,
+    retry: 1,
+  });
+
+  useEffect(() => {
+    if (query.data) updateUser(query.data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.data]);
+
+  return {
+    profile: query.data ?? fallbackUser ?? null,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    refetch: query.refetch,
+  };
+}
+
+interface UpdateProfilePayload {
+  name?: string;
+  email?: string;
+}
+
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((s) => s.user?.id);
+  const updateUser = useAuthStore((s) => s.updateUser);
+
+  return useMutation({
+    mutationFn: async (payload: UpdateProfilePayload) => {
+      if (!userId) throw new Error('Not authenticated');
+      const res = await api.put(`/auth/profile/${userId}`, payload);
+      return res.data.user as User;
+    },
+    onSuccess: (user) => {
+      updateUser(user);
+      queryClient.invalidateQueries({ queryKey: PROFILE_KEY });
+    },
+  });
+}
+
+interface ChangePasswordPayload {
+  currentPassword: string;
+  newPassword: string;
+}
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: async (payload: ChangePasswordPayload) => {
+      const res = await api.put('/auth/change-password', payload);
+      return res.data;
+    },
+  });
+}
+
+export function useSendPhoneOtp() {
+  return useMutation({
+    mutationFn: async (phone: string) => {
+      const res = await api.post('/auth/phone/send-otp', { phone });
+      return res.data;
+    },
+  });
+}
+
+export function useVerifyPhoneOtp() {
+  const queryClient = useQueryClient();
+  const updateUser = useAuthStore((s) => s.updateUser);
+
+  return useMutation({
+    mutationFn: async (payload: { phone: string; otp: string }) => {
+      const res = await api.post('/auth/phone/verify', payload);
+      return res.data;
+    },
+    onSuccess: (_data, variables) => {
+      updateUser({ phoneNumber: variables.phone, phoneVerified: true });
+      queryClient.invalidateQueries({ queryKey: PROFILE_KEY });
+    },
+  });
+}
+
+export function useLogout() {
+  const clearAuth = useAuthStore((s) => s.clearAuth);
+
+  return useMutation({
+    mutationFn: async () => {
+      // Best-effort — logout is JWT-only server-side today (nothing to
+      // revoke), so we don't block local logout on this call succeeding.
+      try {
+        await api.post('/auth/logout');
+      } catch {
+        // ignore — we log out locally regardless
+      }
+    },
+    onSettled: () => {
+      clearAuth();
+      router.replace('/(auth)/login');
+    },
+  });
 }
 </file>
 
@@ -6400,7 +6784,22 @@ export function useWallet() {
 </file>
 
 <file path="lib/api.ts">
+import { CONFIG } from '../constants/config';
+import axios from 'axios';
+import { useAuthStore } from '../stores/authStore';
 
+const BASE_URL = CONFIG.BASE_URL;
+
+export const api = axios.create({
+  baseURL: BASE_URL,
+  timeout: 10000,
+});
+
+api.interceptors.request.use((config) => {
+  const token = useAuthStore.getState().token;
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 </file>
 
 <file path="lib/queryClient.ts">
@@ -6419,27 +6818,113 @@ export const queryClient = new QueryClient({
 
 <file path="stores/authStore.ts">
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-interface User {
+// Mirrors the shape returned by auth-service's getProfile controller.
+// name/email/id are always present (also returned by /login, /signup,
+// /google); the rest only arrive once GET /auth/profile has been fetched.
+export interface User {
   id: string;
   email: string;
   name: string;
+  provider?: 'LOCAL' | 'GOOGLE';
+  profileImage?: string | null;
+  phoneNumber?: string | null;
+  phoneVerified?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface AuthState {
   token: string | null;
   user: User | null;
   isAuthenticated: boolean;
+  hasHydrated: boolean;
   setAuth: (token: string, user: User) => void;
+  updateUser: (patch: Partial<User>) => void;
   clearAuth: () => void;
+  setHasHydrated: (value: boolean) => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  token: null,
-  user: null,
-  isAuthenticated: false,
-  setAuth: (token, user) => set({ token, user, isAuthenticated: true }),
-  clearAuth: () => set({ token: null, user: null, isAuthenticated: false }),
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
+      token: null,
+      user: null,
+      isAuthenticated: false,
+      hasHydrated: false,
+
+      setAuth: (token, user) => set({ token, user, isAuthenticated: true }),
+
+      updateUser: (patch) =>
+        set((s) => ({ user: s.user ? { ...s.user, ...patch } : s.user })),
+
+      clearAuth: () => set({ token: null, user: null, isAuthenticated: false }),
+
+      setHasHydrated: (value) => set({ hasHydrated: value }),
+    }),
+    {
+      name: 'nexustrade-auth',
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (s) => ({ token: s.token, user: s.user, isAuthenticated: s.isAuthenticated }),
+      onRehydrateStorage: () => (state) => {
+        // Runs once AsyncStorage has finished restoring state, whether or
+        // not a session existed — this is what app/index.tsx waits on
+        // before deciding to route to (auth) or (tabs).
+        state?.setHasHydrated(true);
+      },
+    }
+  )
+);
+</file>
+
+<file path="stores/fundingStore.ts">
+import { create } from 'zustand';
+
+export type FundingDirection = 'DEPOSIT' | 'WITHDRAWAL';
+export type FundingType = 'FIAT_STRIPE' | 'CRYPTO_ETH';
+export type FundingStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+export interface FundingTransaction {
+  id: string;
+  direction: FundingDirection;
+  type: FundingType;
+  asset: string;
+  amount: string;
+  status: FundingStatus;
+  cryptoAddress?: string | null;
+  createdAt: string;
+}
+
+interface FundingState {
+  transactions: FundingTransaction[];
+  lastFetched: number | null;
+  // The most recent deposit intent, kept around so the crypto-confirm
+  // step (simulateCryptoDeposit) knows which transaction to confirm.
+  pendingDepositId: string | null;
+  setTransactions: (txs: FundingTransaction[]) => void;
+  addTransaction: (tx: FundingTransaction) => void;
+  setPendingDepositId: (id: string | null) => void;
+  updateTransactionStatus: (id: string, status: FundingStatus) => void;
+}
+
+export const useFundingStore = create<FundingState>((set, get) => ({
+  transactions: [],
+  lastFetched: null,
+  pendingDepositId: null,
+
+  setTransactions: (transactions) => set({ transactions, lastFetched: Date.now() }),
+
+  addTransaction: (tx) => set({ transactions: [tx, ...get().transactions] }),
+
+  setPendingDepositId: (pendingDepositId) => set({ pendingDepositId }),
+
+  updateTransactionStatus: (id, status) => set({
+    transactions: get().transactions.map((tx) =>
+      tx.id === id ? { ...tx, status } : tx
+    ),
+  }),
 }));
 </file>
 
@@ -6503,6 +6988,76 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       },
     },
   })),
+}));
+</file>
+
+<file path="stores/orderStore.ts">
+import { create } from 'zustand';
+
+export type OrderSide = 'BUY' | 'SELL';
+export type OrderStatus = 'PENDING' | 'FILLED' | 'CANCELLED' | 'PARTIAL';
+export type TradeRole = 'MAKER' | 'TAKER';
+
+export interface Order {
+  id: string;
+  userId: string;
+  asset: string;
+  side: OrderSide;
+  price: string;
+  amount: string;
+  status: OrderStatus;
+  createdAt: string;
+}
+
+export interface Trade {
+  id: string;
+  tradeId: string;
+  userId: string;
+  orderId: string;
+  asset: string;
+  side: OrderSide;
+  role: TradeRole;
+  price: string;
+  amount: string;
+  createdAt: string;
+}
+
+interface OrderState {
+  orders: Order[];
+  trades: Trade[];
+  lastFetched: number | null;
+  setOrders: (orders: Order[]) => void;
+  setTrades: (trades: Trade[]) => void;
+  upsertOrder: (order: Order) => void;
+  removeOrder: (orderId: string) => void;
+}
+
+export const useOrderStore = create<OrderState>((set, get) => ({
+  orders: [],
+  trades: [],
+  lastFetched: null,
+
+  setOrders: (orders) => set({ orders, lastFetched: Date.now() }),
+
+  setTrades: (trades) => set({ trades }),
+
+  // Used for optimistic updates (e.g. right after placing an order,
+  // before the next my-orders refetch lands).
+  upsertOrder: (order) => {
+    const existing = get().orders;
+    const idx = existing.findIndex((o) => o.id === order.id);
+    if (idx === -1) {
+      set({ orders: [order, ...existing] });
+    } else {
+      const next = [...existing];
+      next[idx] = order;
+      set({ orders: next });
+    }
+  },
+
+  removeOrder: (orderId) => {
+    set({ orders: get().orders.filter((o) => o.id !== orderId) });
+  },
 }));
 </file>
 
@@ -6670,6 +7225,7 @@ module.exports = defineConfig([
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/space-grotesk": "^0.4.1",
     "@expo/vector-icons": "^15.0.3",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
