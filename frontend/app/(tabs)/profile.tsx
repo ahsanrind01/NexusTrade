@@ -1,44 +1,33 @@
-import { useState, useEffect, useCallback, memo, useRef } from 'react';
+import { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, KeyboardAvoidingView, Platform,
+  Dimensions, TextInput, KeyboardAvoidingView, Platform,
+  Modal, Pressable, Alert,
 } from 'react-native';
 import Animated, {
-  FadeIn, FadeInDown,
+  FadeIn, FadeInDown, FadeInUp, FadeOut,
   useSharedValue, useAnimatedStyle,
-  withTiming, withSequence, withRepeat,
+  withSpring, withTiming, withSequence, withRepeat,
+  interpolate, Easing,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { FontFamily, FontSize } from '../../constants/typography';
-import { useAuthStore } from '../../stores/authStore';
+import { FontFamily } from '../../constants/typography';
+import {
+  useProfile, useUpdateProfile, useChangePassword,
+  useSendPhoneOtp, useVerifyPhoneOtp, useLogout,
+} from '../../hooks/useProfile';
 
 let BlurView: any = null;
-try {
-  BlurView = require('expo-blur').BlurView;
-} catch {
-  BlurView = null;
-}
+try { BlurView = require('expo-blur').BlurView; } catch {}
 
-// ---------------------------------------------------------------------------
-// NOTE ON WIRING THIS SCREEN UP
-// ---------------------------------------------------------------------------
-// 1. API_BASE points at the API Gateway. Update the host for device testing.
-// 2. Assumes useAuthStore exposes `user` ({ id, name, email, createdAt }),
-//    `token`, and a `logout()` action. Rename anything that doesn't match
-//    your actual store — I don't have that file's contents.
-// 3. Password change has NO backend endpoint yet (auth-service only has
-//    signup/login/profile). The row here is wired to a friendly "not
-//    available yet" state instead of a fake call — say the word and I'll
-//    build the backend route + controller for it too.
-// 4. Deposit/Withdraw/Order History buttons route to placeholder paths
-//    (/deposit, /withdraw, /orders) — adjust to wherever those screens
-//    actually live once they exist.
-// ---------------------------------------------------------------------------
+const { width } = Dimensions.get('window');
 
-const API_BASE = 'http://localhost:3000/api';
-
+// ─────────────────────────────────────────────────────────────
+// THEME — mirrored 1:1 from the dashboard so this screen feels
+// like the same app, not a bolted-on page.
+// ─────────────────────────────────────────────────────────────
 const T = {
   bg0: '#06070A',
   glass: 'rgba(255,255,255,0.035)',
@@ -59,25 +48,22 @@ const T = {
   textTer: '#5B6072',
 };
 
-// ---------------------------------------------------------------------------
-// Shared small components — same visual language as Home/Market
-// ---------------------------------------------------------------------------
+type Provider = 'LOCAL' | 'GOOGLE';
 
-const GlassPanel = memo(function GlassPanel({ style, children, intensity = 26, tint = 'dark' }: any) {
+// ─────────────────────────────────────────────────────────────
+// SHARED PRIMITIVES (same contract as dashboard's)
+// ─────────────────────────────────────────────────────────────
+const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
-        <BlurView intensity={intensity} tint={tint} style={StyleSheet.absoluteFill} />
+        <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
         <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
         {children}
       </View>
     );
   }
-  return (
-    <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>
-      {children}
-    </View>
-  );
+  return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
@@ -96,362 +82,575 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   );
 });
 
-const SectionLabel = memo(function SectionLabel({ title }: { title: string }) {
-  return (
-    <View style={styles.sectionLabelRow}>
-      <View style={styles.sectionAccentBar} />
-      <Text style={styles.sectionLabelText}>{title}</Text>
-    </View>
-  );
-});
-
-const ToggleSwitch = memo(function ToggleSwitch({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
-  const anim = useSharedValue(value ? 1 : 0);
-  useEffect(() => { anim.value = withTiming(value ? 1 : 0, { duration: 180 }); }, [value]);
-  const trackStyle = useAnimatedStyle(() => ({
-    backgroundColor: value ? 'rgba(124,138,255,0.35)' : 'rgba(255,255,255,0.08)',
-  }));
-  const knobStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: anim.value * 18 }],
-    backgroundColor: value ? T.accent : T.textTer,
-  }));
-  return (
-    <TouchableOpacity activeOpacity={0.8} onPress={() => onChange(!value)}>
-      <Animated.View style={[styles.toggleTrack, trackStyle]}>
-        <Animated.View style={[styles.toggleKnob, knobStyle]} />
-      </Animated.View>
-    </TouchableOpacity>
-  );
-});
-
-const RowButton = memo(function RowButton({
-  icon, label, sub, onPress, danger, right,
-}: { icon: string; label: string; sub?: string; onPress?: () => void; danger?: boolean; right?: React.ReactNode }) {
-  return (
-    <TouchableOpacity activeOpacity={0.7} onPress={onPress} style={styles.row} disabled={!onPress}>
-      <View style={[styles.rowIconShell, danger && { backgroundColor: T.lossDim, borderColor: 'rgba(255,107,122,0.25)' }]}>
-        <Text style={[styles.rowIconText, danger && { color: T.loss }]}>{icon}</Text>
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.rowLabel, danger && { color: T.loss }]}>{label}</Text>
-        {sub ? <Text style={styles.rowSub}>{sub}</Text> : null}
-      </View>
-      {right ?? (onPress ? <Text style={styles.rowChevron}>›</Text> : null)}
-    </TouchableOpacity>
-  );
-});
-
-const QuickAction = memo(function QuickAction({ label, icon, color, onPress }: { label: string; icon: string; color: string; onPress: () => void }) {
-  return (
-    <TouchableOpacity activeOpacity={0.75} onPress={onPress} style={{ flex: 1, alignItems: 'center' }}>
-      <View style={styles.quickIconShell}>
-        <Text style={[styles.quickIcon, { color }]}>{icon}</Text>
-      </View>
-      <Text style={styles.quickLabel}>{label}</Text>
-    </TouchableOpacity>
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Screen
-// ---------------------------------------------------------------------------
-
-export default function Profile() {
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
-
-  const user = useAuthStore((s) => (s as any).user as { id: string; name: string; email: string; createdAt?: string } | undefined);
-  const token = useAuthStore((s) => (s as any).token as string | undefined);
-  const logout = useAuthStore((s) => (s as any).logout as (() => void) | undefined);
-
-  const [name, setName] = useState(user?.name ?? '');
-  const [email, setEmail] = useState(user?.email ?? '');
-  const [saving, setSaving] = useState(false);
-  const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [pwBanner, setPwBanner] = useState<string | null>(null);
-  const [pushEnabled, setPushEnabled] = useState(true);
-  const [biometricEnabled, setBiometricEnabled] = useState(false);
-  const [confirmingLogout, setConfirmingLogout] = useState(false);
-  const logoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+function AmbientField() {
+  const drift = useSharedValue(0);
   useEffect(() => {
-    setName(user?.name ?? '');
-    setEmail(user?.email ?? '');
-  }, [user?.name, user?.email]);
-
-  const dirty = name !== (user?.name ?? '') || email !== (user?.email ?? '');
-
-  const initials = (user?.name ?? 'T')
-    .trim()
-    .split(/\s+/)
-    .map((p) => p[0]?.toUpperCase())
-    .slice(0, 2)
-    .join('') || 'T';
-
-  const joinedLabel = user?.createdAt
-    ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-    : null;
-
-  const handleSave = useCallback(async () => {
-    if (!user?.id || !token || !dirty) return;
-    setSaving(true);
-    setBanner(null);
-    try {
-      const res = await fetch(`${API_BASE}/auth/profile/${user.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ name, email }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setBanner({ type: 'success', text: 'Profile updated.' });
-      } else {
-        setBanner({ type: 'error', text: data.error ?? 'Could not update profile.' });
-      }
-    } catch {
-      setBanner({ type: 'error', text: 'Network error updating profile.' });
-    } finally {
-      setSaving(false);
-    }
-  }, [user?.id, token, dirty, name, email]);
-
-  const handleLogoutPress = useCallback(() => {
-    if (!confirmingLogout) {
-      setConfirmingLogout(true);
-      logoutTimer.current = setTimeout(() => setConfirmingLogout(false), 3000);
-      return;
-    }
-    if (logoutTimer.current) clearTimeout(logoutTimer.current);
-    logout?.();
-    router.replace('/login'); // adjust to your actual auth route
-  }, [confirmingLogout, logout, router]);
-
-  const handlePasswordRow = useCallback(() => {
-    setPwBanner('Password changes aren’t available yet — this needs a backend endpoint first.');
-    setTimeout(() => setPwBanner(null), 3200);
+    drift.value = withRepeat(withTiming(1, { duration: 12000, easing: Easing.inOut(Easing.sin) }), -1, true);
   }, []);
-
+  const orb1 = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 14]) }, { translateY: interpolate(drift.value, [0, 1], [-8, 10]) }],
+  }));
+  const orb2 = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [10, -16]) }, { translateY: interpolate(drift.value, [0, 1], [6, -12]) }],
+  }));
   return (
-    <View style={styles.root}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
-          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 60 }]}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Header */}
-          <Animated.View entering={FadeIn.duration(400)} style={styles.topBar}>
-            <Text style={styles.screenTitle}>Profile</Text>
-          </Animated.View>
-
-          {/* Identity card */}
-          <Animated.View entering={FadeInDown.delay(40).springify().damping(16)} style={styles.identityWrap}>
-            <GlassPanel style={styles.identityPanel} intensity={30}>
-              <LinearGradient
-                colors={['rgba(124,138,255,0.10)', 'transparent']}
-                start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.8 }}
-                style={StyleSheet.absoluteFill}
-              />
-              <View style={styles.avatarShell}>
-                <LinearGradient colors={[T.accentDeep, T.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
-                <Text style={styles.avatarText}>{initials}</Text>
-              </View>
-              <Text style={styles.identityName}>{user?.name ?? 'Trader'}</Text>
-              <Text style={styles.identityEmail}>{user?.email ?? '—'}</Text>
-              {joinedLabel && (
-                <View style={styles.joinedPill}>
-                  <PulseDot color={T.accent} />
-                  <Text style={styles.joinedText}>Member since {joinedLabel}</Text>
-                </View>
-              )}
-            </GlassPanel>
-          </Animated.View>
-
-          {/* Quick actions */}
-          <Animated.View entering={FadeInDown.delay(70).springify().damping(16)} style={styles.quickWrap}>
-            <GlassPanel style={styles.quickPanel} intensity={22}>
-              <QuickAction label="Deposit" icon="＋" color={T.gain} onPress={() => router.push('/deposit')} />
-              <QuickAction label="Withdraw" icon="↑" color={T.loss} onPress={() => router.push('/withdraw')} />
-              <QuickAction label="Orders" icon="≡" color={T.accent} onPress={() => router.push('/orders')} />
-            </GlassPanel>
-          </Animated.View>
-
-          {/* Edit profile */}
-          <SectionLabel title="Account" />
-          <Animated.View entering={FadeInDown.delay(100).springify().damping(16)} style={styles.cardWrap}>
-            <GlassPanel style={styles.card} intensity={22}>
-              <View style={styles.inputRow}>
-                <Text style={styles.inputLabel}>Name</Text>
-                <View style={styles.inputWrap}>
-                  <TextInput
-                    style={styles.input}
-                    value={name}
-                    onChangeText={setName}
-                    placeholder="Your name"
-                    placeholderTextColor={T.textTer}
-                  />
-                </View>
-              </View>
-              <View style={styles.inputRow}>
-                <Text style={styles.inputLabel}>Email</Text>
-                <View style={styles.inputWrap}>
-                  <TextInput
-                    style={styles.input}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="you@example.com"
-                    placeholderTextColor={T.textTer}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                  />
-                </View>
-              </View>
-
-              {banner && (
-                <Animated.View entering={FadeIn.duration(150)} style={[styles.banner, { backgroundColor: banner.type === 'success' ? T.gainDim : T.lossDim }]}>
-                  <Text style={[styles.bannerText, { color: banner.type === 'success' ? T.gain : T.loss }]}>{banner.text}</Text>
-                </Animated.View>
-              )}
-
-              <TouchableOpacity
-                disabled={!dirty || saving}
-                onPress={handleSave}
-                style={[styles.saveBtn, { opacity: dirty && !saving ? 1 : 0.4 }]}
-              >
-                <LinearGradient colors={[T.accentDeep, T.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />
-                <Text style={styles.saveBtnText}>{saving ? 'Saving…' : 'Save changes'}</Text>
-              </TouchableOpacity>
-            </GlassPanel>
-          </Animated.View>
-
-          {/* Security */}
-          <SectionLabel title="Security" />
-          <Animated.View entering={FadeInDown.delay(130).springify().damping(16)} style={styles.cardWrap}>
-            <GlassPanel style={styles.card} intensity={22}>
-              <RowButton icon="⚿" label="Change password" sub="Update your account password" onPress={handlePasswordRow} />
-              <View style={styles.rowDivider} />
-              <RowButton
-                icon="◈"
-                label="Biometric login"
-                sub="Use Face ID / fingerprint to sign in"
-                right={<ToggleSwitch value={biometricEnabled} onChange={setBiometricEnabled} />}
-              />
-              {pwBanner && (
-                <Animated.View entering={FadeIn.duration(150)} style={[styles.banner, { backgroundColor: T.lossDim, marginTop: 12 }]}>
-                  <Text style={[styles.bannerText, { color: T.loss }]}>{pwBanner}</Text>
-                </Animated.View>
-              )}
-            </GlassPanel>
-          </Animated.View>
-
-          {/* Preferences */}
-          <SectionLabel title="Preferences" />
-          <Animated.View entering={FadeInDown.delay(160).springify().damping(16)} style={styles.cardWrap}>
-            <GlassPanel style={styles.card} intensity={22}>
-              <RowButton
-                icon="◔"
-                label="Push notifications"
-                sub="Price alerts, order fills, security"
-                right={<ToggleSwitch value={pushEnabled} onChange={setPushEnabled} />}
-              />
-              <View style={styles.rowDivider} />
-              <RowButton icon="◎" label="Help & support" onPress={() => router.push('/support')} />
-              <View style={styles.rowDivider} />
-              <RowButton icon="▤" label="Terms & privacy" onPress={() => router.push('/legal')} />
-            </GlassPanel>
-          </Animated.View>
-
-          {/* Logout */}
-          <Animated.View entering={FadeInDown.delay(190).springify().damping(16)} style={styles.cardWrap}>
-            <GlassPanel style={styles.card} intensity={22}>
-              <RowButton
-                icon="⏻"
-                label={confirmingLogout ? 'Tap again to confirm' : 'Log out'}
-                danger
-                onPress={handleLogoutPress}
-                right={<View />}
-              />
-            </GlassPanel>
-          </Animated.View>
-
-          <Text style={styles.versionText}>NexusTrade · v1.0.0</Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Animated.View style={[styles.ambientOrb, { top: -80, left: -60, backgroundColor: T.accentDeep }, orb1]} />
+      <Animated.View style={[styles.ambientOrb, { top: 220, right: -100, backgroundColor: T.violet, opacity: 0.10 }, orb2]} />
     </View>
   );
 }
 
+// Press-scale wrapper, same feel as ActionButton on the dashboard.
+const Pressy = memo(function Pressy({ onPress, children, style }: any) {
+  const press = useSharedValue(0);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.97]) }] }));
+  return (
+    <Animated.View style={[animStyle, style]}>
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={onPress}
+        onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
+        onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
+      >
+        {children}
+      </TouchableOpacity>
+    </Animated.View>
+  );
+});
+
+// ─────────────────────────────────────────────────────────────
+// AVATAR — gradient ring, initials fallback, edit badge
+// ─────────────────────────────────────────────────────────────
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+const Avatar = memo(function Avatar({ name, onEdit }: { name: string; onEdit: () => void }) {
+  const shimmer = useSharedValue(0);
+  useEffect(() => {
+    shimmer.value = withRepeat(withTiming(1, { duration: 2600, easing: Easing.inOut(Easing.sin) }), -1, true);
+  }, []);
+  const ringStyle = useAnimatedStyle(() => ({ opacity: interpolate(shimmer.value, [0, 1], [0.6, 1]) }));
+
+  return (
+    <View style={styles.avatarWrap}>
+      <Animated.View style={[styles.avatarRing, ringStyle]}>
+        <LinearGradient
+          colors={[T.violet, T.accent, T.accentDeep]}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+          style={styles.avatarRingGradient}
+        />
+      </Animated.View>
+      <View style={styles.avatarInner}>
+        <Text style={styles.avatarInitials}>{getInitials(name || 'Trader')}</Text>
+      </View>
+      <Pressy onPress={onEdit} style={styles.avatarEditBtn}>
+        <LinearGradient colors={[T.accentDeep, T.violet]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+        <Text style={styles.avatarEditIcon}>✎</Text>
+      </Pressy>
+    </View>
+  );
+});
+
+// ─────────────────────────────────────────────────────────────
+// BADGES
+// ─────────────────────────────────────────────────────────────
+function ProviderBadge({ provider }: { provider: Provider }) {
+  const isGoogle = provider === 'GOOGLE';
+  return (
+    <View style={[styles.badge, { backgroundColor: isGoogle ? 'rgba(124,138,255,0.10)' : 'rgba(232,182,86,0.10)', borderColor: isGoogle ? 'rgba(124,138,255,0.22)' : 'rgba(232,182,86,0.22)' }]}>
+      <Text style={[styles.badgeText, { color: isGoogle ? T.accent : T.gold }]}>
+        {isGoogle ? 'Google Account' : 'Email & Password'}
+      </Text>
+    </View>
+  );
+}
+
+function VerifiedBadge({ verified }: { verified: boolean }) {
+  return (
+    <View style={[styles.badge, { backgroundColor: verified ? T.gainDim : 'rgba(255,255,255,0.04)', borderColor: verified ? 'rgba(61,220,151,0.22)' : T.hairline }]}>
+      <PulseDot color={verified ? T.gain : T.textTer} />
+      <Text style={[styles.badgeText, { color: verified ? T.gain : T.textTer, marginLeft: 5 }]}>
+        {verified ? 'Phone Verified' : 'Phone Unverified'}
+      </Text>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// QUICK ACTIONS ROW
+// ─────────────────────────────────────────────────────────────
+const ActionButton = memo(function ActionButton({ label, icon, color, onPress }: { label: string; icon: string; color: string; onPress: () => void }) {
+  const press = useSharedValue(0);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.9]) }] }));
+  const glowStyle = useAnimatedStyle(() => ({ opacity: interpolate(press.value, [0, 1], [0, 1]) }));
+  return (
+    <Animated.View style={[{ flex: 1, alignItems: 'center' }, animStyle]}>
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={onPress}
+        onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
+        onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
+        style={{ alignItems: 'center' }}
+      >
+        <View style={styles.actionIconShell}>
+          <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 16, backgroundColor: color, opacity: 0.25 }, glowStyle]} />
+          <Text style={[styles.actionIcon, { color }]}>{icon}</Text>
+        </View>
+        <Text style={styles.actionLabel}>{label}</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+});
+
+// ─────────────────────────────────────────────────────────────
+// INFO ROW — used inside Personal Info / Security panels
+// ─────────────────────────────────────────────────────────────
+function InfoRow({ label, value, onPress, valueColor, isLast }: { label: string; value: string; onPress?: () => void; valueColor?: string; isLast?: boolean }) {
+  const Wrapper: any = onPress ? TouchableOpacity : View;
+  return (
+    <Wrapper activeOpacity={0.7} onPress={onPress} style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <View style={styles.infoRightGroup}>
+        <Text style={[styles.infoValue, valueColor ? { color: valueColor } : {}]} numberOfLines={1}>{value}</Text>
+        {onPress && <Text style={styles.infoChevron}>›</Text>}
+      </View>
+    </Wrapper>
+  );
+}
+
+function SectionLabel({ text }: { text: string }) {
+  return (
+    <View style={styles.sectionLabelRow}>
+      <View style={styles.sectionAccentBar} />
+      <Text style={styles.sectionLabelText}>{text}</Text>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// BOTTOM SHEET MODAL SHELL — glass, slide-up, blurred backdrop
+// ─────────────────────────────────────────────────────────────
+function SheetModal({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <View style={StyleSheet.absoluteFill}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
+          {BlurView ? (
+            <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+          ) : (
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(6,7,10,0.75)' }]} />
+          )}
+        </Pressable>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          pointerEvents="box-none"
+        >
+          <Animated.View entering={FadeInUp.springify().damping(18)} exiting={FadeOut} style={[styles.sheet, { paddingBottom: insets.bottom + 22 }]}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeaderRow}>
+              <Text style={styles.sheetTitle}>{title}</Text>
+              <TouchableOpacity onPress={onClose} style={styles.sheetCloseBtn}>
+                <Text style={styles.sheetCloseIcon}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {children}
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+}
+
+function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType, placeholder }: any) {
+  return (
+    <View style={{ marginBottom: 14 }}>
+      <Text style={styles.sheetInputLabel}>{label}</Text>
+      <View style={styles.sheetInputBox}>
+        <TextInput
+          style={styles.sheetInputText}
+          value={value}
+          onChangeText={onChangeText}
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
+          placeholder={placeholder}
+          placeholderTextColor={T.textTer}
+          autoCapitalize="none"
+        />
+      </View>
+    </View>
+  );
+}
+
+function SheetPrimaryButton({ label, onPress, loading }: { label: string; onPress: () => void; loading?: boolean }) {
+  return (
+    <Pressy onPress={loading ? undefined : onPress} style={{ marginTop: 6 }}>
+      <View style={[styles.sheetPrimaryBtn, loading && { opacity: 0.7 }]}>
+        <LinearGradient colors={[T.accentDeep, T.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />
+        <Text style={styles.sheetPrimaryBtnText}>{loading ? 'Please wait…' : label}</Text>
+      </View>
+    </Pressy>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// MAIN SCREEN
+// ─────────────────────────────────────────────────────────────
+export default function Profile() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+
+  const { profile: user, isLoading: profileLoading } = useProfile();
+  const updateProfileMutation = useUpdateProfile();
+  const changePasswordMutation = useChangePassword();
+  const sendOtpMutation = useSendPhoneOtp();
+  const verifyOtpMutation = useVerifyPhoneOtp();
+  const logoutMutation = useLogout();
+
+  // Normalized view of the profile with safe fallbacks while the
+  // GET /auth/profile request is in flight (falls back to what
+  // login/signup already put in authStore).
+  const profile = useMemo(() => ({
+    id: user?.id ?? '',
+    name: user?.name ?? 'Trader',
+    email: user?.email ?? '',
+    provider: (user?.provider ?? 'LOCAL') as Provider,
+    profileImage: user?.profileImage ?? null,
+    phoneNumber: user?.phoneNumber ?? null,
+    phoneVerified: user?.phoneVerified ?? false,
+    createdAt: user?.createdAt ?? new Date().toISOString(),
+  }), [user]);
+
+  const [editVisible, setEditVisible] = useState(false);
+  const [editName, setEditName] = useState(profile.name);
+  const [editEmail, setEditEmail] = useState(profile.email);
+
+  const [pwdVisible, setPwdVisible] = useState(false);
+  const [currentPwd, setCurrentPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [confirmPwd, setConfirmPwd] = useState('');
+
+  const [phoneVisible, setPhoneVisible] = useState(false);
+  const [phoneStep, setPhoneStep] = useState<'enter' | 'otp'>('enter');
+  const [phoneInput, setPhoneInput] = useState(profile.phoneNumber ?? '');
+  const [otpInput, setOtpInput] = useState('');
+
+  const memberSince = useMemo(() => {
+    const d = new Date(profile.createdAt);
+    return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  }, [profile.createdAt]);
+
+  const openEdit = useCallback(() => {
+    setEditName(profile.name);
+    setEditEmail(profile.email);
+    setEditVisible(true);
+  }, [profile.name, profile.email]);
+
+  const handleSaveProfile = useCallback(() => {
+    if (!editName.trim() || !editEmail.trim()) {
+      return Alert.alert('Missing Fields', 'Name and email cannot be empty.');
+    }
+    updateProfileMutation.mutate(
+      { name: editName.trim(), email: editEmail.trim() },
+      {
+        onSuccess: () => setEditVisible(false),
+        onError: (err: any) => Alert.alert('Update Failed', err.response?.data?.error || 'Something went wrong'),
+      }
+    );
+  }, [editName, editEmail, updateProfileMutation]);
+
+  const handleChangePassword = useCallback(() => {
+    if (!currentPwd || !newPwd || !confirmPwd) {
+      return Alert.alert('Missing Fields', 'Please fill in all password fields.');
+    }
+    if (newPwd !== confirmPwd) {
+      return Alert.alert('Passwords Don\u2019t Match', 'New password and confirmation must match.');
+    }
+    changePasswordMutation.mutate(
+      { currentPassword: currentPwd, newPassword: newPwd },
+      {
+        onSuccess: () => {
+          setPwdVisible(false);
+          setCurrentPwd(''); setNewPwd(''); setConfirmPwd('');
+        },
+        onError: (err: any) => Alert.alert('Change Failed', err.response?.data?.error || 'Something went wrong'),
+      }
+    );
+  }, [currentPwd, newPwd, confirmPwd, changePasswordMutation]);
+
+  const handleSendOtp = useCallback(() => {
+    if (!phoneInput.trim()) return Alert.alert('Missing Field', 'Enter a phone number first.');
+    sendOtpMutation.mutate(phoneInput.trim(), {
+      onSuccess: () => setPhoneStep('otp'),
+      onError: (err: any) => Alert.alert('Failed to Send OTP', err.response?.data?.error || 'Something went wrong'),
+    });
+  }, [phoneInput, sendOtpMutation]);
+
+  const handleVerifyOtp = useCallback(() => {
+    if (!otpInput.trim()) return Alert.alert('Missing Field', 'Enter the code we sent you.');
+    verifyOtpMutation.mutate(
+      { phone: phoneInput.trim(), otp: otpInput.trim() },
+      {
+        onSuccess: () => {
+          setPhoneVisible(false);
+          setPhoneStep('enter');
+          setOtpInput('');
+        },
+        onError: (err: any) => Alert.alert('Verification Failed', err.response?.data?.error || 'Something went wrong'),
+      }
+    );
+  }, [phoneInput, otpInput, verifyOtpMutation]);
+
+  const closePhoneSheet = useCallback(() => {
+    setPhoneVisible(false);
+    setPhoneStep('enter');
+    setOtpInput('');
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    Alert.alert('Log Out', 'Are you sure you want to log out?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log Out', style: 'destructive', onPress: () => logoutMutation.mutate() },
+    ]);
+  }, [logoutMutation]);
+
+  const saving = updateProfileMutation.isPending;
+  const changingPwd = changePasswordMutation.isPending;
+  const sendingOtp = sendOtpMutation.isPending;
+  const verifyingOtp = verifyOtpMutation.isPending;
+
+  return (
+    <View style={styles.root}>
+      <AmbientField />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 60 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Top bar */}
+        <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+            <Text style={styles.backIcon}>‹</Text>
+          </TouchableOpacity>
+          <Text style={styles.topBarTitle}>Profile</Text>
+          <View style={{ width: 38 }} />
+        </Animated.View>
+
+        {/* Hero identity card */}
+        <Animated.View entering={FadeInDown.delay(70).springify().damping(16)} style={styles.heroWrap}>
+          <GlassPanel style={styles.heroPanel} intensity={32}>
+            <LinearGradient
+              colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
+              start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.5 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={['rgba(124,138,255,0.10)', 'transparent']}
+              start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.8 }}
+              style={StyleSheet.absoluteFill}
+            />
+
+            <View style={styles.heroCenter}>
+              <Avatar name={profile.name} onEdit={openEdit} />
+              <Text style={styles.heroName}>{profile.name}</Text>
+              <Text style={styles.heroEmail}>{profile.email}</Text>
+
+              <View style={styles.badgeRow}>
+                <ProviderBadge provider={profile.provider} />
+                <VerifiedBadge verified={profile.phoneVerified} />
+              </View>
+            </View>
+
+            <View style={styles.heroDivider} />
+
+            <View style={styles.statsStrip}>
+              <View style={styles.statCell}>
+                <Text style={styles.statCellLabel}>MEMBER SINCE</Text>
+                <Text style={styles.statCellValue}>{memberSince}</Text>
+              </View>
+              <View style={styles.statCell}>
+                <Text style={styles.statCellLabel}>ACCOUNT ID</Text>
+                <Text style={styles.statCellValue}>#{profile.id ? profile.id.slice(0, 6).toUpperCase() : '------'}</Text>
+              </View>
+              <View style={styles.statCell}>
+                <Text style={styles.statCellLabel}>STATUS</Text>
+                <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing…' : 'Active'}</Text>
+              </View>
+            </View>
+          </GlassPanel>
+        </Animated.View>
+
+        {/* Quick actions */}
+        <Animated.View entering={FadeInDown.delay(140).springify().damping(16)} style={styles.actionsPanelWrap}>
+          <GlassPanel style={styles.actionsPanel} intensity={24}>
+            <View style={styles.actionsRow}>
+              <ActionButton label="Edit Profile" icon="✎" color={T.accent} onPress={openEdit} />
+              <ActionButton label="Password" icon="⚿" color={T.gold} onPress={() => setPwdVisible(true)} />
+              <ActionButton label="Phone" icon="☎" color={T.violet} onPress={() => setPhoneVisible(true)} />
+              <ActionButton label="Logout" icon="⏻" color={T.loss} onPress={handleLogout} />
+            </View>
+          </GlassPanel>
+        </Animated.View>
+
+        {/* Personal information */}
+        <Animated.View entering={FadeInDown.delay(190).springify().damping(16)}>
+          <SectionLabel text="Personal Information" />
+          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <InfoRow label="Full Name" value={profile.name} onPress={openEdit} />
+            <InfoRow label="Email Address" value={profile.email} onPress={openEdit} isLast />
+          </GlassPanel>
+        </Animated.View>
+
+        {/* Security */}
+        <Animated.View entering={FadeInDown.delay(230).springify().damping(16)}>
+          <SectionLabel text="Security" />
+          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <InfoRow
+              label="Password"
+              value={profile.provider === 'LOCAL' ? 'Change password' : 'Managed by Google'}
+              onPress={profile.provider === 'LOCAL' ? () => setPwdVisible(true) : undefined}
+            />
+            <InfoRow
+              label="Phone Number"
+              value={profile.phoneNumber ?? 'Not added'}
+              valueColor={profile.phoneVerified ? T.gain : undefined}
+              onPress={() => setPhoneVisible(true)}
+            />
+            <InfoRow
+              label="Google Account"
+              value={profile.provider === 'GOOGLE' ? 'Linked' : 'Not linked'}
+              valueColor={profile.provider === 'GOOGLE' ? T.gain : undefined}
+              isLast
+            />
+          </GlassPanel>
+        </Animated.View>
+
+        {/* Danger zone */}
+        <Animated.View entering={FadeInDown.delay(270).springify().damping(16)} style={{ marginTop: 4 }}>
+          <SectionLabel text="Danger Zone" />
+          <Pressy onPress={handleLogout}>
+            <GlassPanel style={styles.dangerPanel} intensity={20}>
+              <Text style={styles.dangerText}>Log Out</Text>
+              <Text style={styles.dangerChevron}>›</Text>
+            </GlassPanel>
+          </Pressy>
+        </Animated.View>
+      </ScrollView>
+
+      {/* ── Edit Profile Sheet ───────────────────────────── */}
+      <SheetModal visible={editVisible} onClose={() => setEditVisible(false)} title="Edit Profile">
+        <SheetInput label="Full Name" value={editName} onChangeText={setEditName} placeholder="Your name" />
+        <SheetInput label="Email Address" value={editEmail} onChangeText={setEditEmail} placeholder="you@example.com" keyboardType="email-address" />
+        <SheetPrimaryButton label="Save Changes" onPress={handleSaveProfile} loading={saving} />
+      </SheetModal>
+
+      {/* ── Change Password Sheet ───────────────────────────── */}
+      <SheetModal visible={pwdVisible} onClose={() => setPwdVisible(false)} title="Change Password">
+        <SheetInput label="Current Password" value={currentPwd} onChangeText={setCurrentPwd} secureTextEntry placeholder="••••••••" />
+        <SheetInput label="New Password" value={newPwd} onChangeText={setNewPwd} secureTextEntry placeholder="••••••••" />
+        <SheetInput label="Confirm New Password" value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry placeholder="••••••••" />
+        <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number & a symbol.</Text>
+        <SheetPrimaryButton label="Update Password" onPress={handleChangePassword} loading={changingPwd} />
+      </SheetModal>
+
+      {/* ── Phone Verify Sheet ───────────────────────────── */}
+      <SheetModal visible={phoneVisible} onClose={closePhoneSheet} title={phoneStep === 'enter' ? 'Add Phone Number' : 'Verify OTP'}>
+        {phoneStep === 'enter' ? (
+          <>
+            <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+92 300 1234567" keyboardType="phone-pad" />
+            <SheetPrimaryButton label="Send OTP" onPress={handleSendOtp} loading={sendingOtp} />
+          </>
+        ) : (
+          <>
+            <Text style={styles.sheetHint}>We sent a 6-digit code to {phoneInput}.</Text>
+            <SheetInput label="Verification Code" value={otpInput} onChangeText={setOtpInput} placeholder="••••••" keyboardType="number-pad" />
+            <SheetPrimaryButton label="Verify Phone" onPress={handleVerifyOtp} loading={verifyingOtp} />
+          </>
+        )}
+      </SheetModal>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// STYLES
+// ─────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
+  ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.14 },
 
-  topBar: { marginBottom: 18 },
-  screenTitle: { fontSize: 23, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.3 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
+  backBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
+  backIcon: { fontSize: 22, color: T.textPri, marginTop: -2 },
+  topBarTitle: { fontSize: 16, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2 },
 
-  identityWrap: { marginBottom: 14, borderRadius: 24 },
-  identityPanel: { borderRadius: 24, padding: 22, alignItems: 'center', borderWidth: 1, borderColor: T.glassBorderHi },
-  avatarShell: {
-    width: 68, height: 68, borderRadius: 22, overflow: 'hidden',
-    justifyContent: 'center', alignItems: 'center', marginBottom: 12,
-  },
-  avatarText: { fontSize: 24, fontFamily: FontFamily.heading, color: '#fff' },
-  identityName: { fontSize: 18, fontFamily: FontFamily.heading, color: T.textPri },
-  identityEmail: { fontSize: 12.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 4 },
-  joinedPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14,
-    backgroundColor: 'rgba(124,138,255,0.1)', borderRadius: 20,
-    paddingHorizontal: 10, paddingVertical: 5,
-  },
-  joinedText: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.accent },
+  heroWrap: { marginBottom: 16, borderRadius: 26, shadowColor: T.accentDeep, shadowOpacity: 0.28, shadowRadius: 30, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
+  heroPanel: { borderRadius: 26, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
+  heroCenter: { alignItems: 'center' },
 
-  quickWrap: { marginBottom: 22, borderRadius: 20 },
-  quickPanel: {
-    borderRadius: 20, paddingVertical: 16, paddingHorizontal: 10,
-    flexDirection: 'row', justifyContent: 'space-between',
-    borderWidth: 1, borderColor: T.glassBorder,
-  },
-  quickIconShell: {
-    width: 46, height: 46, borderRadius: 15,
-    backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: T.hairline,
-    justifyContent: 'center', alignItems: 'center', marginBottom: 7,
-  },
-  quickIcon: { fontSize: 17, fontFamily: FontFamily.heading },
-  quickLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textSec },
+  avatarWrap: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  avatarRing: { position: 'absolute', width: 96, height: 96, borderRadius: 48, padding: 2.5 },
+  avatarRingGradient: { flex: 1, borderRadius: 48 },
+  avatarInner: { width: 86, height: 86, borderRadius: 43, backgroundColor: '#14151C', justifyContent: 'center', alignItems: 'center' },
+  avatarInitials: { fontSize: 28, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.5 },
+  avatarEditBtn: { position: 'absolute', bottom: -2, right: -2, width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center', overflow: 'hidden', borderWidth: 2, borderColor: T.bg0 },
+  avatarEditIcon: { fontSize: 13, color: '#fff' },
 
-  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: 2 },
+  heroName: { fontSize: 21, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.3, marginBottom: 3 },
+  heroEmail: { fontSize: 13, fontFamily: FontFamily.body, color: T.textSec, marginBottom: 14 },
+
+  badgeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center' },
+  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
+  badgeText: { fontSize: 10.5, fontFamily: FontFamily.heading, letterSpacing: 0.2 },
+
+  heroDivider: { height: 1, backgroundColor: T.hairline, marginVertical: 18 },
+  statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
+  statCell: { alignItems: 'flex-start' },
+  statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6, marginBottom: 4 },
+  statCellValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
+
+  actionsPanelWrap: { marginBottom: 20, borderRadius: 22 },
+  actionsPanel: { borderRadius: 22, paddingVertical: 18, paddingHorizontal: 10, borderWidth: 1, borderColor: T.glassBorder },
+  actionsRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  actionIconShell: { width: 52, height: 52, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: T.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 8, overflow: 'hidden' },
+  actionIcon: { fontSize: 19, fontFamily: FontFamily.heading },
+  actionLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textSec, letterSpacing: 0.2 },
+
+  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: 4 },
   sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
-  sectionLabelText: { fontSize: 12.5, fontFamily: FontFamily.heading, color: T.textSec, letterSpacing: 0.4, textTransform: 'uppercase' },
+  sectionLabelText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2, flex: 1 },
 
-  cardWrap: { marginBottom: 20, borderRadius: 20 },
-  card: { borderRadius: 20, padding: 16, borderWidth: 1, borderColor: T.glassBorder },
+  infoPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 16, marginBottom: 18 },
+  infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 15 },
+  infoRowBorder: { borderBottomWidth: 1, borderBottomColor: T.hairline },
+  infoLabel: { fontSize: 13, fontFamily: FontFamily.bodyMedium, color: T.textSec },
+  infoRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '60%' },
+  infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
+  infoChevron: { fontSize: 17, color: T.textTer, marginTop: -2 },
 
-  inputRow: { marginBottom: 12 },
-  inputLabel: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 6, letterSpacing: 0.3 },
-  inputWrap: {
-    backgroundColor: T.glass, borderRadius: 13,
-    borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14,
-  },
-  input: { fontSize: 14, fontFamily: FontFamily.bodyMedium, color: T.textPri, paddingVertical: 13 },
+  dangerPanel: { borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.18)', paddingVertical: 16, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dangerText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
+  dangerChevron: { fontSize: 18, color: T.loss },
 
-  banner: { borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, marginTop: 2, marginBottom: 10 },
-  bannerText: { fontSize: 11.5, fontFamily: FontFamily.bodyMedium, textAlign: 'center' },
+  // Sheet modal
+  sheet: { backgroundColor: '#0B0C11', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 12, borderWidth: 1, borderColor: T.glassBorderHi, borderBottomWidth: 0 },
+  sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: T.hairline, alignSelf: 'center', marginBottom: 16 },
+  sheetHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  sheetTitle: { fontSize: 17, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2 },
+  sheetCloseBtn: { width: 30, height: 30, borderRadius: 10, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
+  sheetCloseIcon: { fontSize: 12, color: T.textSec },
 
-  saveBtn: { borderRadius: 13, paddingVertical: 14, alignItems: 'center', overflow: 'hidden', marginTop: 2 },
-  saveBtnText: { fontSize: 13, fontFamily: FontFamily.heading, color: '#fff' },
+  sheetInputLabel: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.4, marginBottom: 7 },
+  sheetInputBox: { backgroundColor: 'rgba(255,255,255,0.035)', borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14 },
+  sheetInputText: { fontSize: 14, fontFamily: FontFamily.body, color: T.textPri, paddingVertical: 13 },
+  sheetHint: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, lineHeight: 16, marginBottom: 14 },
 
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
-  rowIconShell: {
-    width: 38, height: 38, borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: T.hairline,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  rowIconText: { fontSize: 15, color: T.textSec },
-  rowLabel: { fontSize: 13.5, fontFamily: FontFamily.bodyMedium, color: T.textPri },
-  rowSub: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
-  rowChevron: { fontSize: 18, color: T.textTer },
-  rowDivider: { height: 1, backgroundColor: T.hairline, marginVertical: 6 },
-
-  toggleTrack: { width: 42, height: 24, borderRadius: 12, padding: 3, justifyContent: 'center' },
-  toggleKnob: { width: 18, height: 18, borderRadius: 9 },
-
-  versionText: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center', marginTop: 4 },
+  sheetPrimaryBtn: { height: 50, borderRadius: 15, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
+  sheetPrimaryBtnText: { fontSize: 14, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 0.2 },
 });

@@ -1,3 +1,138 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+src/
+  config/
+    db.ts
+    kafka.ts
+  controllers/
+    authController.ts
+  db/
+    migrations/
+      meta/
+        _journal.json
+        0000_snapshot.json
+      0000_known_kronos.sql
+    schema.ts
+  middleware/
+    authenticate.ts
+  routes/
+    authRoutes.ts
+  utils/
+    validation.ts
+  index.ts
+create-db.ts
+drizzle.config.ts
+package.json
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="src/config/db.ts">
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+export const db = drizzle(pool);
+
+export const initDB = async () => {
+  try {
+    await pool.query('SELECT 1');
+    console.log('[Auth Service] Dedicated PostgreSQL Pool Initialized');
+  } catch (error) {
+    console.error('[Auth Service] Database connection failed:', error);
+    process.exit(1);
+  }
+};
+</file>
+
+<file path="src/config/kafka.ts">
+import { Kafka } from 'kafkajs';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const kafka = new Kafka({
+  clientId: 'auth-service',
+  brokers: [process.env.KAFKA_BROKER || 'localhost:9092'],
+});
+
+const producer = kafka.producer();
+
+export const connectAuthProducer = async () => {
+  try {
+    await producer.connect();
+    console.log('[Auth Service] Kafka Producer connected successfully');
+  } catch (error) {
+    console.error('[Auth Service] Kafka Producer connection failed:', error);
+  }
+};
+
+export const emitUserCreatedEvent = async (userId: string, email: string, name: string) => {
+  try {
+    await producer.send({
+      topic: 'user-created',
+      messages: [
+        {
+          value: JSON.stringify({ userId, email, name, timestamp: new Date() }),
+        },
+      ],
+    });
+    console.log(`[Auth Kafka] Emitted 'user-created' for User ID: ${userId}`);
+  } catch (error) {
+    console.error('[Auth Kafka] Failed to emit user event:', error);
+  }
+};
+</file>
+
+<file path="src/controllers/authController.ts">
 import { randomInt } from 'crypto';
 import bcrypt from 'bcrypt';
 import { and, desc, eq } from 'drizzle-orm';
@@ -578,3 +713,514 @@ export const updateProfile = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 };
+</file>
+
+<file path="src/db/migrations/meta/_journal.json">
+{
+  "version": "6",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1783053465540,
+      "tag": "0000_known_kronos",
+      "breakpoints": true
+    }
+  ]
+}
+</file>
+
+<file path="src/db/migrations/meta/0000_snapshot.json">
+{
+  "id": "6a588da9-a6cf-40e3-9fc7-99921a9e28d7",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "6",
+  "dialect": "postgresql",
+  "tables": {
+    "public.phone_verification_codes": {
+      "name": "phone_verification_codes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phone": {
+          "name": "phone",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "otp": {
+          "name": "otp",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "phone_verification_codes_user_id_users_id_fk": {
+          "name": "phone_verification_codes_user_id_users_id_fk",
+          "tableFrom": "phone_verification_codes",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "google_id": {
+          "name": "google_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "auth_provider",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'LOCAL'"
+        },
+        "profile_image": {
+          "name": "profile_image",
+          "type": "varchar(512)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone_number": {
+          "name": "phone_number",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone_verified": {
+          "name": "phone_verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_email_unique": {
+          "name": "users_email_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "email"
+          ]
+        },
+        "users_google_id_unique": {
+          "name": "users_google_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "google_id"
+          ]
+        }
+      }
+    }
+  },
+  "enums": {
+    "public.auth_provider": {
+      "name": "auth_provider",
+      "schema": "public",
+      "values": [
+        "LOCAL",
+        "GOOGLE"
+      ]
+    }
+  },
+  "schemas": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
+</file>
+
+<file path="src/db/migrations/0000_known_kronos.sql">
+DO $$ BEGIN
+ CREATE TYPE "public"."auth_provider" AS ENUM('LOCAL', 'GOOGLE');
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "phone_verification_codes" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"phone" varchar(32) NOT NULL,
+	"otp" varchar(255) NOT NULL,
+	"expires_at" timestamp NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "users" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"name" varchar(255) NOT NULL,
+	"email" varchar(255) NOT NULL,
+	"password_hash" varchar(255),
+	"google_id" varchar(255),
+	"provider" "auth_provider" DEFAULT 'LOCAL' NOT NULL,
+	"profile_image" varchar(512),
+	"phone_number" varchar(32),
+	"phone_verified" boolean DEFAULT false NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "users_email_unique" UNIQUE("email"),
+	CONSTRAINT "users_google_id_unique" UNIQUE("google_id")
+);
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "phone_verification_codes" ADD CONSTRAINT "phone_verification_codes_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+</file>
+
+<file path="src/db/schema.ts">
+import { boolean, pgEnum, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+
+export const authProviderEnum = pgEnum('auth_provider', ['LOCAL', 'GOOGLE']);
+
+export const users = pgTable('users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  passwordHash: varchar('password_hash', { length: 255 }),
+  googleId: varchar('google_id', { length: 255 }).unique(),
+  provider: authProviderEnum('provider').notNull().default('LOCAL'),
+  profileImage: varchar('profile_image', { length: 512 }),
+  phoneNumber: varchar('phone_number', { length: 32 }),
+  phoneVerified: boolean('phone_verified').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const phoneVerificationCodes = pgTable('phone_verification_codes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  phone: varchar('phone', { length: 32 }).notNull(),
+  otp: varchar('otp', { length: 255 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+</file>
+
+<file path="src/middleware/authenticate.ts">
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
+
+export interface AuthRequest extends Request {
+  userId?: string;
+  email?: string;
+}
+
+export const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Missing or invalid token' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string };
+    req.userId = decoded.userId;
+    req.email = decoded.email;
+    return next();
+  } catch {
+    return res.status(401).json({ success: false, error: 'Token expired or invalid' });
+  }
+};
+</file>
+
+<file path="src/routes/authRoutes.ts">
+import { Router } from 'express';
+import {
+  signup,
+  login,
+  getProfile,
+  logout,
+  updateProfile,
+  changePassword,
+  googleSignIn,
+  sendPhoneOtp,
+  verifyPhoneOtp,
+} from '../controllers/authController';
+import { authenticate } from '../middleware/authenticate';
+
+const router = Router();
+
+router.post('/signup', signup);
+router.post('/login', login);
+router.post('/google', googleSignIn);
+router.get('/profile', authenticate, getProfile);
+router.get('/profile/:userId', authenticate, getProfile);
+router.post('/logout', authenticate, logout);
+router.put('/profile/:userId', authenticate, updateProfile);
+router.put('/change-password', authenticate, changePassword);
+router.post('/phone/send-otp', authenticate, sendPhoneOtp);
+router.post('/phone/verify', authenticate, verifyPhoneOtp);
+
+export default router;
+</file>
+
+<file path="src/utils/validation.ts">
+export const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+export const isValidEmail = (email: string) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+export const normalizePhoneNumber = (phone: string) => {
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/[^\d+]/g, '');
+
+  if (digits.startsWith('+')) {
+    return `+${digits.slice(1).replace(/\D/g, '')}`;
+  }
+
+  return digits.replace(/\D/g, '');
+};
+
+export const isValidPhoneNumber = (phone: string) =>
+  /^\+[1-9]\d{7,14}$/.test(phone.trim());
+
+export const isStrongPassword = (password: string) =>
+  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(password);
+
+export const isLikelyGoogleIdToken = (token: string) =>
+  token.trim().split('.').length === 3;
+</file>
+
+<file path="src/index.ts">
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { initDB } from './config/db';
+import { connectAuthProducer } from './config/kafka';
+import authRoutes from './routes/authRoutes';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 3006;
+
+app.use(cors());
+app.use(express.json());
+
+app.use('/api/auth', authRoutes);
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'Auth Service is healthy' });
+});
+
+const start = async () => {
+  await initDB();
+  await connectAuthProducer();
+  app.listen(PORT, () => {
+    console.log(`Auth Service running on http://localhost:${PORT}`);
+  });
+};
+
+start().catch(console.error);
+</file>
+
+<file path="create-db.ts">
+import pg from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const DB_NAME = 'nexustrade_auth_db';
+
+const run = async () => {
+  const client = new pg.Client({
+    host: process.env.DB_HOST || 'localhost',
+    port: Number(process.env.DB_PORT) || 5432,
+    user: process.env.DB_USER || 'admin',
+    password: process.env.DB_PASSWORD || 'secretpassword',
+    database: 'postgres',
+  });
+
+  try {
+    await client.connect();
+
+    const result = await client.query(
+      `SELECT 1 FROM pg_database WHERE datname = $1`,
+      [DB_NAME]
+    );
+
+    if (result.rowCount === 0) {
+      await client.query(`CREATE DATABASE ${DB_NAME}`);
+      console.log(`Database '${DB_NAME}' created.`);
+    } else {
+      console.log(`Database '${DB_NAME}' already exists.`);
+    }
+  } catch (error) {
+    console.error('Failed to create database:', error);
+    process.exit(1);
+  } finally {
+    await client.end();
+  }
+};
+
+run();
+</file>
+
+<file path="drizzle.config.ts">
+import { defineConfig } from 'drizzle-kit';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export default defineConfig({
+  schema: './src/db/schema.ts',
+  out: './src/db/migrations',
+  dialect: 'postgresql',
+  dbCredentials: {
+    url: process.env.DATABASE_URL || '',
+  },
+});
+</file>
+
+<file path="package.json">
+{
+  "name": "auth-service",
+  "version": "1.0.0",
+  "description": "NexusTrade Authentication Service",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:create": "tsx create-db.ts",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.30.10",
+    "express": "^4.19.2",
+    "google-auth-library": "^10.9.0",
+    "jsonwebtoken": "^9.0.2",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^20.12.7",
+    "@types/pg": "^8.11.5",
+    "drizzle-kit": "^0.21.4",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
+  }
+}
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "./dist",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "create-db.ts"]
+}
+</file>
+
+</files>
