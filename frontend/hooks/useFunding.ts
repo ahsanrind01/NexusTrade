@@ -24,7 +24,7 @@ interface DepositIntentResponse {
     type: string;
     amount: string;
     asset: string;
-    stripeCheckoutUrl: string | null;
+    stripeClientSecret: string | null;
     cryptoDepositAddress: string | null;
   };
 }

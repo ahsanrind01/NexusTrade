@@ -5,7 +5,7 @@ import {
   Modal, TextInput, Platform,
   Alert, ActivityIndicator, Keyboard, TouchableWithoutFeedback,
 } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
+import { useStripe } from '@stripe/stripe-react-native';
 import Animated, {
   FadeIn, FadeInDown,
   useSharedValue, useAnimatedStyle,
@@ -20,6 +20,7 @@ import { useWallet } from '../../hooks/useWallet';
 import { useTransferFunds, useWalletTransfers, type WalletTransferRecord } from '../../hooks/useWallet';
 import { useWalletStore, PRICE_MAP } from '../../stores/walletStore';
 import { useMarketStore } from '../../stores/marketStore';
+import { useTicker24h } from '../../hooks/useTicker24h';
 import {
   useFundingHistory,
   useCreateDepositIntent,
@@ -70,6 +71,15 @@ const FIAT_ASSETS = new Set(['USDT', 'USDC']);
 const MODAL_ASSETS = ['USDT', 'BTC', 'ETH', 'BNB', 'SOL'] as const;
 const CRYPTO_ASSETS = ['BTC', 'ETH', 'BNB', 'SOL'] as const;
 
+// Formats a raw balance for display / for prefilling the MAX button —
+// keeps small holdings from truncating to 0.00.
+function formatAssetAmount(balance: number): string {
+  if (!balance || balance <= 0) return '0';
+  if (balance < 0.001) return balance.toFixed(6);
+  if (balance < 1) return balance.toFixed(4);
+  return balance.toFixed(2);
+}
+
 type HistoryItem = {
   id: string;
   kind: 'DEPOSIT' | 'WITHDRAW' | 'TRANSFER';
@@ -88,7 +98,7 @@ type DepositIntentTransaction = {
   type: string;
   amount: string;
   asset: string;
-  stripeCheckoutUrl: string | null;
+  stripeClientSecret: string | null;
   cryptoDepositAddress: string | null;
 };
 
@@ -196,11 +206,20 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   const [kind, setKind] = useState<DepositKind | null>(null);
   const [asset, setAsset] = useState<typeof MODAL_ASSETS[number]>('BTC');
   const [amount, setAmount] = useState('');
+  const [destination, setDestination] = useState('');
   const [pendingDeposit, setPendingDeposit] = useState<DepositIntentTransaction | null>(null);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [processingStatus, setProcessingStatus] = useState<'PENDING' | 'COMPLETED' | 'FAILED' | null>(null);
 
   const createDepositIntent = useCreateDepositIntent();
   const simulateCryptoDeposit = useSimulateCryptoDeposit();
   const createWithdrawalIntent = useCreateWithdrawalIntent();
+  const { initPaymentSheet, presentPaymentSheet } = useStripe();
+  const { refetch: refetchFundingHistory } = useFundingHistory();
+  const transactions = useFundingStore((s) => s.transactions);
+  const walletBalances = useWalletStore((s) => s.balances);
+  const availableBalance = walletBalances[asset] ?? 0;
+
   const loading =
     createDepositIntent.isPending ||
     simulateCryptoDeposit.isPending ||
@@ -212,16 +231,48 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
 
   useEffect(() => {
     if (visible) {
-      backdropOp.value = withTiming(1, { duration: 280 });
-      translateY.value = withSpring(0, { damping: 20, stiffness: 160 });
+      backdropOp.value = withTiming(1, { duration: 200 });
+      translateY.value = withTiming(0, { duration: 240, easing: Easing.out(Easing.cubic) });
     } else {
-      backdropOp.value = withTiming(0, { duration: 220 });
-      translateY.value = withTiming(600, { duration: 260 });
+      backdropOp.value = withTiming(0, { duration: 180 });
+      translateY.value = withTiming(600, { duration: 220, easing: Easing.in(Easing.cubic) });
       setKind(null);
       setPendingDeposit(null);
       setAmount('');
+      setDestination('');
+      setProcessingId(null);
+      setProcessingStatus(null);
     }
   }, [visible]);
+
+  // Poll the server every 2s while we're waiting on a deposit to clear
+  useEffect(() => {
+    if (!processingId) return;
+    const interval = setInterval(() => {
+      refetchFundingHistory();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [processingId, refetchFundingHistory]);
+
+  // Watch the store for the processing transaction flipping to COMPLETED/FAILED
+  useEffect(() => {
+    if (!processingId) return;
+    const tx = transactions.find((t) => t.id === processingId);
+    if (!tx) return;
+
+    if (tx.status === 'COMPLETED') {
+      setProcessingStatus('COMPLETED');
+      const timeout = setTimeout(() => {
+        onSuccess();
+        onClose();
+      }, 1000);
+      return () => clearTimeout(timeout);
+    }
+
+    if (tx.status === 'FAILED') {
+      setProcessingStatus('FAILED');
+    }
+  }, [transactions, processingId, onSuccess, onClose]);
 
   const sheetStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value - keyboardHeight.value }],
@@ -233,6 +284,9 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
     setKind(null);
     setPendingDeposit(null);
     setAmount('');
+    setDestination('');
+    setProcessingId(null);
+    setProcessingStatus(null);
     onClose();
   }, [onClose]);
 
@@ -244,36 +298,45 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   const goBackToMethod = useCallback(() => {
     setKind(null);
     setAmount('');
+    setDestination('');
   }, []);
 
-  const openCheckout = useCallback(async () => {
-    if (!pendingDeposit?.stripeCheckoutUrl) {
-      Alert.alert('Checkout unavailable', 'No checkout URL was returned for this deposit.');
+  const startCardPayment = useCallback(async (clientSecret: string, transactionId: string) => {
+    const { error: initError } = await initPaymentSheet({
+      merchantDisplayName: 'NexusTrade',
+      paymentIntentClientSecret: clientSecret,
+    });
+
+    if (initError) {
+      Alert.alert('Payment setup failed', initError.message);
       return;
     }
 
-    try {
-      await WebBrowser.openBrowserAsync(pendingDeposit.stripeCheckoutUrl);
-    } catch (err) {
-      console.error('Failed to open checkout:', err);
-      Alert.alert('Unable to open checkout', 'Please try again from the deposit history.');
+    const { error: presentError } = await presentPaymentSheet();
+
+    if (presentError) {
+      if (presentError.code !== 'Canceled') {
+        Alert.alert('Payment failed', presentError.message);
+      }
+      return;
     }
-  }, [pendingDeposit]);
+
+    // Card was charged successfully — now wait for the webhook to clear the deposit
+    setProcessingId(transactionId);
+    setProcessingStatus('PENDING');
+  }, [initPaymentSheet, presentPaymentSheet]);
 
   const confirmCryptoDeposit = useCallback(async () => {
     if (!pendingDeposit) return;
 
     try {
       await simulateCryptoDeposit.mutateAsync(pendingDeposit.id);
-      Alert.alert('Deposit completed', 'Your wallet balance has been updated.');
-      setPendingDeposit(null);
-      setAmount('');
-      onSuccess();
-      onClose();
+      setProcessingId(pendingDeposit.id);
+      setProcessingStatus('PENDING');
     } catch (err: any) {
       Alert.alert('Confirmation failed', err.response?.data?.error || 'Something went wrong');
     }
-  }, [pendingDeposit, simulateCryptoDeposit, onSuccess, onClose]);
+  }, [pendingDeposit, simulateCryptoDeposit]);
 
   const handleSubmit = async () => {
     Keyboard.dismiss();
@@ -283,33 +346,43 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
       return;
     }
 
+    if (mode === 'withdraw' && !destination.trim()) {
+      Alert.alert(
+        'Missing destination',
+        kind === 'FIAT' ? 'Enter the bank account to withdraw to.' : 'Enter the destination wallet address.'
+      );
+      return;
+    }
+
     const type = FIAT_ASSETS.has(asset) ? 'FIAT_STRIPE' : 'CRYPTO_ETH';
 
     try {
       if (mode === 'deposit') {
         const { transaction } = await createDepositIntent.mutateAsync({ asset, amount, type });
-        setPendingDeposit(transaction);
 
-        if (transaction.type === 'FIAT_STRIPE' && transaction.stripeCheckoutUrl) {
-          await WebBrowser.openBrowserAsync(transaction.stripeCheckoutUrl);
+        if (transaction.type === 'FIAT_STRIPE' && transaction.stripeClientSecret) {
+          // Native card form opens immediately; no intermediate "intent ready" screen needed
+          await startCardPayment(transaction.stripeClientSecret, transaction.id);
+          return;
         }
+
+        setPendingDeposit(transaction);
         Alert.alert(
           'Deposit intent created',
-          transaction.type === 'FIAT_STRIPE'
-            ? 'Complete checkout to finalize the deposit.'
-            : 'Send the funds to the displayed address, then confirm from this screen.'
+          'Send the funds to the displayed address, then confirm from this screen.'
         );
       } else {
         await createWithdrawalIntent.mutateAsync({
           asset,
           amount,
           type,
-          destinationAddress: type === 'CRYPTO_ETH' ? '0xUserProvidedDestinationAddress' : undefined,
+          destinationAddress: destination.trim(),
         });
         Alert.alert('Success', 'Withdrawal request submitted.');
       }
       if (mode === 'withdraw') {
         setAmount('');
+        setDestination('');
         onSuccess();
         onClose();
       }
@@ -319,8 +392,9 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   };
 
   const meta = ASSET_META[asset];
-  const showDepositDetails = mode === 'deposit' && pendingDeposit !== null;
-  const showMethodStep = kind === null;
+  const showProcessing = processingId !== null;
+  const showDepositDetails = mode === 'deposit' && pendingDeposit !== null && !showProcessing;
+  const showMethodStep = kind === null && !showProcessing;
   const tint: [string, string] = mode === 'deposit'
     ? [T.gain + '14', 'transparent']
     : [T.loss + '14', 'transparent'];
@@ -338,36 +412,66 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
               <View>
                 <View style={styles.sheetHandle} />
 
-                <View style={styles.sheetHeader}>
-                  {!showMethodStep && !showDepositDetails && (
-                    <TouchableOpacity onPress={goBackToMethod} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                      <Text style={styles.backBtnText}>‹</Text>
-                    </TouchableOpacity>
-                  )}
-                  <View style={[styles.sheetIconWrap, {
-                    backgroundColor: mode === 'deposit' ? T.gainDim : T.lossDim,
-                    borderColor: mode === 'deposit' ? T.gain + '40' : T.loss + '40',
-                  }]}>
-                    <Text style={[styles.sheetIcon, { color: mode === 'deposit' ? T.gain : T.loss }]}>
-                      {mode === 'deposit' ? '↓' : '↑'}
-                    </Text>
+                {!showProcessing && (
+                  <View style={styles.sheetHeader}>
+                    {!showMethodStep && !showDepositDetails && (
+                      <TouchableOpacity onPress={goBackToMethod} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                        <Text style={styles.backBtnText}>‹</Text>
+                      </TouchableOpacity>
+                    )}
+                    <View style={[styles.sheetIconWrap, {
+                      backgroundColor: mode === 'deposit' ? T.gainDim : T.lossDim,
+                      borderColor: mode === 'deposit' ? T.gain + '40' : T.loss + '40',
+                    }]}>
+                      <Text style={[styles.sheetIcon, { color: mode === 'deposit' ? T.gain : T.loss }]}>
+                        {mode === 'deposit' ? '↓' : '↑'}
+                      </Text>
+                    </View>
+                    <View>
+                      <Text style={styles.sheetTitle}>{mode === 'deposit' ? 'Add Funds' : 'Withdraw'}</Text>
+                      <Text style={styles.sheetSubtitle}>
+                        {mode === 'deposit' ? 'Deposit assets to your wallet' : 'Withdraw assets from your wallet'}
+                      </Text>
+                    </View>
                   </View>
-                  <View>
-                    <Text style={styles.sheetTitle}>{mode === 'deposit' ? 'Add Funds' : 'Withdraw'}</Text>
-                    <Text style={styles.sheetSubtitle}>
-                      {mode === 'deposit' ? 'Deposit assets to your wallet' : 'Withdraw assets from your wallet'}
-                    </Text>
-                  </View>
-                </View>
+                )}
 
-                {showMethodStep ? (
+                {showProcessing ? (
+                  <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                    {processingStatus === 'COMPLETED' ? (
+                      <>
+                        <Text style={{ fontSize: 40, marginBottom: 14 }}>✅</Text>
+                        <Text style={styles.sheetTitle}>Deposit complete</Text>
+                        <Text style={[styles.sheetSubtitle, { marginTop: 6, textAlign: 'center' }]}>
+                          Your balance has been updated.
+                        </Text>
+                      </>
+                    ) : processingStatus === 'FAILED' ? (
+                      <>
+                        <Text style={{ fontSize: 40, marginBottom: 14 }}>⚠️</Text>
+                        <Text style={styles.sheetTitle}>Deposit failed</Text>
+                        <TouchableOpacity style={styles.sheetGhostBtn} onPress={dismissModal}>
+                          <Text style={styles.sheetGhostText}>Close</Text>
+                        </TouchableOpacity>
+                      </>
+                    ) : (
+                      <>
+                        <ActivityIndicator color={T.accent} size="large" style={{ marginBottom: 16 }} />
+                        <Text style={styles.sheetTitle}>Processing deposit...</Text>
+                        <Text style={[styles.sheetSubtitle, { marginTop: 6, textAlign: 'center' }]}>
+                          This usually takes a few seconds.
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                ) : showMethodStep ? (
                   <View style={styles.methodGrid}>
                     <TouchableOpacity style={styles.methodCard} onPress={() => selectKind('FIAT')} activeOpacity={0.85}>
                       <View style={[styles.methodIconWrap, { backgroundColor: T.gainDim, borderColor: T.gain + '40' }]}>
                         <Text style={[styles.methodIcon, { color: T.gain }]}>$</Text>
                       </View>
                       <Text style={styles.methodTitle}>USDT</Text>
-                      <Text style={styles.methodSubtitle}>Via Stripe checkout</Text>
+                      <Text style={styles.methodSubtitle}>{mode === 'withdraw' ? 'To your bank account' : 'Pay by card'}</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={styles.methodCard} onPress={() => selectKind('CRYPTO')} activeOpacity={0.85}>
@@ -375,7 +479,7 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                         <Text style={[styles.methodIcon, { color: T.accent }]}>₿</Text>
                       </View>
                       <Text style={styles.methodTitle}>Crypto</Text>
-                      <Text style={styles.methodSubtitle}>On-chain transfer</Text>
+                      <Text style={styles.methodSubtitle}>{mode === 'withdraw' ? 'To external wallet' : 'On-chain transfer'}</Text>
                     </TouchableOpacity>
                   </View>
                 ) : showDepositDetails ? (
@@ -384,7 +488,7 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                       <Text style={styles.intentCardTitle}>Deposit intent ready</Text>
                       <Text style={styles.intentCardText}>
                         {pendingDeposit.type === 'FIAT_STRIPE'
-                          ? 'Your checkout session is ready. The deposit remains pending until the processor confirms it.'
+                          ? 'Your payment session is ready. The deposit remains pending until the processor confirms it.'
                           : 'Send funds to the address below. The deposit remains pending until you confirm completion.'}
                       </Text>
                       <View style={styles.intentDetailRow}>
@@ -406,8 +510,8 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                     {pendingDeposit.type === 'FIAT_STRIPE' ? (
                       <TouchableOpacity
                         style={styles.sheetSubmitBtn}
-                        onPress={openCheckout}
-                        disabled={!pendingDeposit.stripeCheckoutUrl}
+                        onPress={() => pendingDeposit.stripeClientSecret && startCardPayment(pendingDeposit.stripeClientSecret, pendingDeposit.id)}
+                        disabled={!pendingDeposit.stripeClientSecret}
                         activeOpacity={0.85}
                       >
                         <LinearGradient
@@ -415,7 +519,7 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                           start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                           style={styles.sheetSubmitGradient}
                         >
-                          <Text style={styles.sheetSubmitText}>OPEN CHECKOUT →</Text>
+                          <Text style={styles.sheetSubmitText}>RETRY PAYMENT →</Text>
                         </LinearGradient>
                       </TouchableOpacity>
                     ) : (
@@ -449,7 +553,7 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                         <View style={[styles.assetPillDot, { backgroundColor: ASSET_META.USDT.color }]} />
                         <Text style={styles.fixedAssetText}>USDT</Text>
                         <View style={styles.fixedAssetBadge}>
-                          <Text style={styles.fixedAssetBadgeText}>STRIPE</Text>
+                          <Text style={styles.fixedAssetBadgeText}>CARD</Text>
                         </View>
                       </View>
                     ) : (
@@ -479,6 +583,26 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                       </>
                     )}
 
+                    {mode === 'withdraw' && (
+                      <>
+                        <Text style={styles.sheetLabel}>
+                          {kind === 'FIAT' ? 'Bank Account Number / IBAN' : 'Destination Wallet Address'}
+                        </Text>
+                        <View style={styles.recipientWrap}>
+                          <TextInput
+                            style={styles.recipientInput}
+                            value={destination}
+                            onChangeText={setDestination}
+                            placeholder={kind === 'FIAT' ? 'e.g. GB29 NWBK 6016 1331 9268 19' : '0x...'}
+                            placeholderTextColor={T.textTer}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            returnKeyType="next"
+                          />
+                        </View>
+                      </>
+                    )}
+
                     <Text style={styles.sheetLabel}>Amount</Text>
                     <View style={styles.amountWrap}>
                       <Text style={styles.amountSymbol}>{meta?.symbol ?? '$'}</Text>
@@ -493,10 +617,18 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                         returnKeyType="done"
                         onSubmitEditing={Keyboard.dismiss}
                       />
-                      <TouchableOpacity onPress={() => setAmount('100')} style={styles.maxBtn}>
-                        <Text style={styles.maxText}>MAX</Text>
-                      </TouchableOpacity>
+                      {mode === 'withdraw' && (
+                        <TouchableOpacity onPress={() => setAmount(formatAssetAmount(availableBalance))} style={styles.maxBtn}>
+                          <Text style={styles.maxText}>MAX</Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
+
+                    {mode === 'withdraw' && (
+                      <Text style={styles.availableBalanceText}>
+                        Available: {formatAssetAmount(availableBalance)} {asset}
+                      </Text>
+                    )}
 
                     <View style={styles.sheetInfoRow}>
                       <Text style={styles.sheetInfoLabel}>Network fee</Text>
@@ -505,7 +637,7 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                     <View style={styles.sheetInfoRow}>
                       <Text style={styles.sheetInfoLabel}>Processing time</Text>
                       <Text style={styles.sheetInfoValue}>
-                        {mode === 'withdraw' ? '1-2 mins' : kind === 'FIAT' ? 'Instant after checkout' : 'Pending confirmation'}
+                        {mode === 'withdraw' ? '1-2 mins' : kind === 'FIAT' ? 'Instant after payment' : 'Pending confirmation'}
                       </Text>
                     </View>
 
@@ -524,7 +656,7 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                           ? <ActivityIndicator color="#fff" />
                           : <Text style={styles.sheetSubmitText}>
                               {mode === 'deposit'
-                                ? (kind === 'FIAT' ? 'CONTINUE TO STRIPE' : 'CREATE DEPOSIT INTENT')
+                                ? (kind === 'FIAT' ? 'PAY WITH CARD' : 'CREATE DEPOSIT INTENT')
                                 : 'CONFIRM WITHDRAWAL'} →
                             </Text>
                         }
@@ -551,6 +683,8 @@ function TransferModal({ visible, onClose, onSuccess }: {
   const [amount, setAmount] = useState('');
 
   const transferFunds = useTransferFunds();
+  const walletBalances = useWalletStore((s) => s.balances);
+  const availableBalance = walletBalances[asset] ?? 0;
 
   const translateY = useSharedValue(600);
   const backdropOp = useSharedValue(0);
@@ -558,11 +692,11 @@ function TransferModal({ visible, onClose, onSuccess }: {
 
   useEffect(() => {
     if (visible) {
-      backdropOp.value = withTiming(1, { duration: 280 });
-      translateY.value = withSpring(0, { damping: 20, stiffness: 160 });
+      backdropOp.value = withTiming(1, { duration: 200 });
+      translateY.value = withTiming(0, { duration: 240, easing: Easing.out(Easing.cubic) });
     } else {
-      backdropOp.value = withTiming(0, { duration: 220 });
-      translateY.value = withTiming(600, { duration: 260 });
+      backdropOp.value = withTiming(0, { duration: 180 });
+      translateY.value = withTiming(600, { duration: 220, easing: Easing.in(Easing.cubic) });
       setRecipient('');
       setAmount('');
       setAsset('USDT');
@@ -692,10 +826,13 @@ function TransferModal({ visible, onClose, onSuccess }: {
                     returnKeyType="done"
                     onSubmitEditing={Keyboard.dismiss}
                   />
-                  <TouchableOpacity onPress={() => setAmount('100')} style={styles.maxBtn}>
+                  <TouchableOpacity onPress={() => setAmount(formatAssetAmount(availableBalance))} style={styles.maxBtn}>
                     <Text style={styles.maxText}>MAX</Text>
                   </TouchableOpacity>
                 </View>
+                <Text style={styles.availableBalanceText}>
+                  Available: {formatAssetAmount(availableBalance)} {asset}
+                </Text>
 
                 <View style={styles.sheetInfoRow}>
                   <Text style={styles.sheetInfoLabel}>Processing time</Text>
@@ -760,7 +897,7 @@ const AssetCard = memo(function AssetCard({
 
   return (
     <Animated.View
-      entering={FadeInDown.delay(Math.min(index, 8) * 60).springify().damping(18)}
+      entering={FadeInDown.delay(Math.min(index, 6) * 25).duration(200)}
       style={[animStyle, styles.assetCardWrap]}
     >
       <TouchableOpacity activeOpacity={1} onPressIn={onPressIn} onPressOut={onPressOut}>
@@ -814,7 +951,7 @@ const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem
   const borderColor = isTransfer ? T.accent + '30' : isDeposit ? T.gain + '30' : T.loss + '30';
 
   return (
-    <Animated.View entering={FadeInDown.delay(Math.min(index, 8) * 50).springify().damping(18)} style={styles.historyRow}>
+    <Animated.View entering={FadeInDown.delay(Math.min(index, 6) * 25).duration(200)} style={styles.historyRow}>
       <View style={[
         styles.historyIconWrap,
         {
@@ -882,12 +1019,16 @@ function sortHistoryItems(items: HistoryItem[]) {
 export default function Wallet() {
   const insets = useSafeAreaInsets();
 
-  const { isLoading, isFetching, refetch } = useWallet();
+  const { isLoading, refetch } = useWallet();
   const { isLoading: transferHistoryLoading, refetch: refetchTransfers, data: transferRecords = [] } = useWalletTransfers();
 
   const balances = useWalletStore((s) => s.balances);
   const totalUsd = useWalletStore((s) => s.totalUsd);
   const marketPrices = useMarketStore((s) => s.prices);
+  const ticker24h = useMarketStore((s) => s.ticker24h);
+
+  // Populates useMarketStore's ticker24h with live 24h change % from Binance.
+  useTicker24h();
 
   const livePrices = useMemo(() => {
     const out: Record<string, number> = {};
@@ -926,6 +1067,26 @@ export default function Wallet() {
     [balances]
   );
 
+  // Total wallet PnL: sum of each holding's real 24h dollar move, derived
+  // from its current USD value and Binance's live 24h change percent
+  // (stablecoins have no listed pair, so they contribute 0 change).
+  const portfolioPnl = useMemo(() => {
+    let pnlUsd = 0;
+    let prevTotal = 0;
+
+    for (const [asset, balance] of assetList) {
+      const price = livePrices[asset] ?? PRICE_MAP[asset] ?? 0;
+      const usdValue = balance * price;
+      const changePercent = FIAT_ASSETS.has(asset) ? 0 : (ticker24h[`${asset}USDT`]?.change ?? 0);
+      const prevValue = changePercent ? usdValue / (1 + changePercent / 100) : usdValue;
+      pnlUsd += usdValue - prevValue;
+      prevTotal += prevValue;
+    }
+
+    const pnlPercent = prevTotal > 0 ? (pnlUsd / prevTotal) * 100 : 0;
+    return { pnlUsd, pnlPercent };
+  }, [assetList, livePrices, ticker24h]);
+
   const openDeposit = useCallback(() => {
     setModalMode('deposit');
     setModalVisible(true);
@@ -955,10 +1116,15 @@ export default function Wallet() {
     refetchTransfers();
   }, [refetch, refetchHistory, refetchTransfers]);
 
-  const onRefresh = useCallback(() => {
-    refetch();
-    refetchHistory();
-    refetchTransfers();
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setIsManualRefreshing(true);
+    try {
+      await Promise.all([refetch(), refetchHistory(), refetchTransfers()]);
+    } finally {
+      setIsManualRefreshing(false);
+    }
   }, [refetch, refetchHistory, refetchTransfers]);
 
   const handleSectionAssets = useCallback(() => setActiveSection('assets'), []);
@@ -979,7 +1145,7 @@ export default function Wallet() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={isFetching && !isLoading}
+            refreshing={isManualRefreshing}
             onRefresh={onRefresh}
             tintColor={T.accent}
           />
@@ -1022,9 +1188,28 @@ export default function Wallet() {
               )}
 
               <View style={styles.heroDeltaRow}>
-                <View style={styles.heroDeltaBadge}>
-                  <Text style={styles.heroDeltaText}>Portfolio analytics coming soon</Text>
-                </View>
+                {isLoading ? null : assetList.length === 0 ? (
+                  <View style={styles.heroDeltaBadge}>
+                    <Text style={styles.heroDeltaText}>No holdings yet</Text>
+                  </View>
+                ) : (
+                  <View style={[
+                    styles.heroDeltaBadge,
+                    portfolioPnl.pnlUsd < 0 && {
+                      backgroundColor: T.lossDim,
+                      borderColor: 'rgba(255,107,122,0.2)',
+                    },
+                  ]}>
+                    <Text style={[
+                      styles.heroDeltaText,
+                      { color: portfolioPnl.pnlUsd >= 0 ? T.gain : T.loss },
+                    ]}>
+                      {portfolioPnl.pnlUsd >= 0 ? '↑ +' : '↓ -'}
+                      ${Math.abs(portfolioPnl.pnlUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {' '}({portfolioPnl.pnlPercent >= 0 ? '+' : '-'}{Math.abs(portfolioPnl.pnlPercent).toFixed(2)}%)
+                    </Text>
+                  </View>
+                )}
                 <Text style={styles.heroAssetCount}>{assetList.length} assets</Text>
               </View>
             </View>
@@ -1096,75 +1281,77 @@ export default function Wallet() {
           </TouchableOpacity>
         </Animated.View>
 
-        <View style={activeSection === 'assets' ? undefined : styles.hidden}>
-          <View style={styles.sectionLabelRow}>
-            <View style={styles.sectionAccentBar} />
-            <Text style={styles.sectionLabelText}>Your Holdings</Text>
-            <View style={styles.sectionCountPill}>
-              <Text style={styles.sectionCountText}>{assetList.length}</Text>
+        {activeSection === 'assets' ? (
+          <View>
+            <View style={styles.sectionLabelRow}>
+              <View style={styles.sectionAccentBar} />
+              <Text style={styles.sectionLabelText}>Your Holdings</Text>
+              <View style={styles.sectionCountPill}>
+                <Text style={styles.sectionCountText}>{assetList.length}</Text>
+              </View>
             </View>
+
+            {isLoading ? (
+              <View style={styles.loadingState}>
+                <ActivityIndicator color={T.accent} />
+                <Text style={styles.loadingText}>Loading balances...</Text>
+              </View>
+            ) : assetList.length === 0 ? (
+              <Animated.View entering={FadeIn.duration(200)} style={styles.emptyState}>
+                <Text style={styles.emptyIcon}>◎</Text>
+                <Text style={styles.emptyTitle}>No Assets Yet</Text>
+                <Text style={styles.emptyText}>Add funds to get started trading</Text>
+                <TouchableOpacity style={styles.emptyBtn} onPress={openDeposit}>
+                  <LinearGradient
+                    colors={[T.accentDeep, T.violet]}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                    style={styles.emptyBtnGradient}
+                  >
+                    <Text style={styles.emptyBtnText}>Add Funds →</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </Animated.View>
+            ) : (
+              assetList.map(([asset, balance], i) => {
+                const price = livePrices[asset] ?? PRICE_MAP[asset] ?? 0;
+                const usdValue = balance * price;
+                return (
+                  <AssetCard
+                    key={asset}
+                    asset={asset}
+                    balance={balance}
+                    usdValue={usdValue}
+                    index={i}
+                  />
+                );
+              })
+            )}
           </View>
-
-          {isLoading ? (
-            <View style={styles.loadingState}>
-              <ActivityIndicator color={T.accent} />
-              <Text style={styles.loadingText}>Loading balances...</Text>
+        ) : (
+          <View>
+            <View style={styles.sectionLabelRow}>
+              <View style={styles.sectionAccentBar} />
+              <Text style={styles.sectionLabelText}>Transaction History</Text>
             </View>
-          ) : assetList.length === 0 ? (
-            <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
-              <Text style={styles.emptyIcon}>◎</Text>
-              <Text style={styles.emptyTitle}>No Assets Yet</Text>
-              <Text style={styles.emptyText}>Add funds to get started trading</Text>
-              <TouchableOpacity style={styles.emptyBtn} onPress={openDeposit}>
-                <LinearGradient
-                  colors={[T.accentDeep, T.violet]}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={styles.emptyBtnGradient}
-                >
-                  <Text style={styles.emptyBtnText}>Add Funds →</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            </Animated.View>
-          ) : (
-            assetList.map(([asset, balance], i) => {
-              const price = livePrices[asset] ?? PRICE_MAP[asset] ?? 0;
-              const usdValue = balance * price;
-              return (
-                <AssetCard
-                  key={asset}
-                  asset={asset}
-                  balance={balance}
-                  usdValue={usdValue}
-                  index={i}
-                />
-              );
-            })
-          )}
-        </View>
 
-        <View style={activeSection === 'history' ? undefined : styles.hidden}>
-          <View style={styles.sectionLabelRow}>
-            <View style={styles.sectionAccentBar} />
-            <Text style={styles.sectionLabelText}>Transaction History</Text>
+            {historyLoading || transferHistoryLoading ? (
+              <View style={styles.loadingState}>
+                <ActivityIndicator color={T.accent} />
+                <Text style={styles.loadingText}>Loading history...</Text>
+              </View>
+            ) : history.length === 0 ? (
+              <Animated.View entering={FadeIn.duration(200)} style={styles.emptyState}>
+                <Text style={styles.emptyIcon}>◎</Text>
+                <Text style={styles.emptyTitle}>No Transactions</Text>
+                <Text style={styles.emptyText}>Your deposits and withdrawals will appear here</Text>
+              </Animated.View>
+            ) : (
+              history.map((item, i) => (
+                <HistoryRow key={item.id} item={item} index={i} />
+              ))
+            )}
           </View>
-
-          {historyLoading || transferHistoryLoading ? (
-            <View style={styles.loadingState}>
-              <ActivityIndicator color={T.accent} />
-              <Text style={styles.loadingText}>Loading history...</Text>
-            </View>
-          ) : history.length === 0 ? (
-            <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
-              <Text style={styles.emptyIcon}>◎</Text>
-              <Text style={styles.emptyTitle}>No Transactions</Text>
-              <Text style={styles.emptyText}>Your deposits and withdrawals will appear here</Text>
-            </Animated.View>
-          ) : (
-            history.map((item, i) => (
-              <HistoryRow key={item.id} item={item} index={i} />
-            ))
-          )}
-        </View>
+        )}
       </ScrollView>
 
       <FundingModal
@@ -1185,7 +1372,6 @@ export default function Wallet() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
-  hidden: { display: 'none' },
   scroll: { paddingHorizontal: 18 },
   ambientOrb: { position: 'absolute', width: 260, height: 260, borderRadius: 130, opacity: 0.13 },
 
@@ -1338,6 +1524,7 @@ const styles = StyleSheet.create({
   amountInput: { flex: 1, fontSize: 22, fontFamily: FontFamily.heading, color: T.textPri },
   maxBtn: { backgroundColor: T.accentDeep + '30', borderRadius: 7, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1, borderColor: T.accent + '40' },
   maxText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 1 },
+  availableBalanceText: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, marginTop: -10, marginBottom: 16 },
   sheetInfoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   sheetInfoLabel: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
   sheetInfoValue: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textSec },
