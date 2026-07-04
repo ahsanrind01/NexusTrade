@@ -38,22 +38,22 @@ const SYMBOL_META: Record<string, { name: string; short: string; color: string }
 
 const T = {
   bg0: '#06070A',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
 const PERIODS = ['1D', '1W', '1M', '3M', 'ALL'];
@@ -68,7 +68,7 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -87,7 +87,7 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
       <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ringStyle]} />
-      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }} />
+      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color, shadowColor: color, shadowOpacity: 0.9, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }} />
     </View>
   );
 });
@@ -95,13 +95,13 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
 const PriceFlash = memo(function PriceFlash({ price, positive }: { price: string; positive: boolean }) {
   const flash = useSharedValue(0);
   const flashStyle = useAnimatedStyle(() => ({
-    backgroundColor: `rgba(${positive ? '61,220,151' : '255,107,122'}, ${flash.value * 0.18})`,
+    backgroundColor: `rgba(${positive ? '61,220,151' : '255,107,122'}, ${flash.value * 0.2})`,
   }));
   useEffect(() => {
     flash.value = withSequence(withTiming(1, { duration: 100 }), withTiming(0, { duration: 700 }));
   }, [price]);
   return (
-    <Animated.View style={[{ borderRadius: 5, paddingHorizontal: 3, paddingVertical: 1 }, flashStyle]}>
+    <Animated.View style={[{ borderRadius: 6, paddingHorizontal: 4, paddingVertical: 1.5 }, flashStyle]}>
       <Text style={styles.assetPrice}>${price}</Text>
     </Animated.View>
   );
@@ -122,7 +122,7 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       const y2 = h - ((points[i + 1] - min) / range) * h;
       const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
       const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
-      return { x1, y1, length, angle, opacity: 0.35 + (i / points.length) * 0.65 };
+      return { x1, y1, length, angle, opacity: 0.4 + (i / points.length) * 0.6 };
     });
   }, [points]);
 
@@ -133,8 +133,8 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       {segments.map((s, i) => (
         <View key={i} style={{
           position: 'absolute', left: s.x1, top: s.y1,
-          width: s.length, height: 1.75,
-          backgroundColor: color, borderRadius: 1,
+          width: s.length, height: 2,
+          backgroundColor: color, borderRadius: 2,
           opacity: s.opacity,
           transform: [{ rotate: `${s.angle}deg` }],
           transformOrigin: '0 0',
@@ -147,18 +147,22 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
 function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
-    drift.value = withRepeat(withTiming(1, { duration: 12000, easing: Easing.inOut(Easing.sin) }), -1, true);
+    drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
   }, []);
   const orb1 = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 14]) }, { translateY: interpolate(drift.value, [0, 1], [-8, 10]) }],
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [-14, 16]) }, { translateY: interpolate(drift.value, [0, 1], [-10, 12]) }],
   }));
   const orb2 = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(drift.value, [0, 1], [10, -16]) }, { translateY: interpolate(drift.value, [0, 1], [6, -12]) }],
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [12, -18]) }, { translateY: interpolate(drift.value, [0, 1], [8, -14]) }],
+  }));
+  const orb3 = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [-8, 10]) }, { translateY: interpolate(drift.value, [0, 1], [10, -8]) }],
   }));
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Animated.View style={[styles.ambientOrb, { top: -80, left: -60, backgroundColor: T.accentDeep }, orb1]} />
-      <Animated.View style={[styles.ambientOrb, { top: 140, right: -100, backgroundColor: T.violet, opacity: 0.10 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: -90, left: -70, backgroundColor: T.accentDeep }, orb1]} />
+      <Animated.View style={[styles.ambientOrb, { top: 150, right: -110, backgroundColor: T.violet, opacity: 0.09 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: 520, left: -90, width: 220, height: 220, borderRadius: 110, backgroundColor: T.gold, opacity: 0.05 }, orb3]} />
     </View>
   );
 }
@@ -180,17 +184,18 @@ const PortfolioCard = memo(function PortfolioCard() {
 
   return (
     <Animated.View entering={FadeInDown.delay(70).springify().damping(16)} style={styles.heroWrap}>
-      <GlassPanel style={styles.heroPanel} intensity={32}>
+      <GlassPanel style={styles.heroPanel} intensity={34}>
         <LinearGradient
-          colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
-          start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.4 }}
+          colors={['rgba(255,255,255,0.10)', 'rgba(255,255,255,0)']}
+          start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.45 }}
           style={StyleSheet.absoluteFill}
         />
         <LinearGradient
-          colors={['rgba(124,138,255,0.10)', 'transparent']}
-          start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.8 }}
+          colors={['rgba(124,138,255,0.14)', 'rgba(181,131,255,0.04)', 'transparent']}
+          start={{ x: 0.05, y: 0 }} end={{ x: 0.95, y: 0.9 }}
           style={StyleSheet.absoluteFill}
         />
+        <View style={styles.heroInnerBorder} pointerEvents="none" />
 
         <View style={styles.heroTop}>
           <View style={{ flex: 1 }}>
@@ -218,7 +223,7 @@ const PortfolioCard = memo(function PortfolioCard() {
                 {balances['USDT'] ? `$${balances['USDT'].toFixed(2)}` : '—'}
               </Text>
             </View>
-            <View style={[styles.heroStatItem, { marginTop: 12 }]}>
+            <View style={[styles.heroStatItem, { marginTop: 14 }]}>
               <Text style={styles.heroStatLabel}>BTC</Text>
               <Text style={[styles.heroStatValue, { color: T.accent }]}>
                 {balances['BTC'] ? balances['BTC'].toFixed(6) : '—'}
@@ -233,7 +238,7 @@ const PortfolioCard = memo(function PortfolioCard() {
             return (
               <Animated.View key={i} entering={FadeInUp.delay(140 + i * 18).springify()} style={styles.barCol}>
                 <LinearGradient
-                  colors={last ? [T.violet, T.accent] : [T.accent + '00', T.accent + Math.round((0.06 + (i / BARS.length) * 0.3) * 255).toString(16).padStart(2, '0')]}
+                  colors={last ? [T.violet, T.accent] : [T.accent + '00', T.accent + Math.round((0.08 + (i / BARS.length) * 0.34) * 255).toString(16).padStart(2, '0')]}
                   start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
                   style={[styles.bar, { height: (h / 100) * 50 }]}
                 />
@@ -269,8 +274,8 @@ const PortfolioCard = memo(function PortfolioCard() {
             { l: 'ASSETS',       v: `${assetCount}`,             c: T.accent  },
             { l: 'USDT BAL',     v: balances['USDT'] ? `$${balances['USDT'].toFixed(0)}` : '—', c: T.gain },
             { l: 'BTC BAL',      v: balances['BTC']  ? balances['BTC'].toFixed(5)  : '—', c: T.gold },
-          ].map((s) => (
-            <View key={s.l} style={styles.statCell}>
+          ].map((s, i) => (
+            <View key={s.l} style={[styles.statCell, i > 0 && styles.statCellDivider]}>
               <Text style={styles.statCellLabel}>{s.l}</Text>
               <Text style={[styles.statCellValue, s.c ? { color: s.c } : {}]}>{s.v}</Text>
             </View>
@@ -294,7 +299,7 @@ const ActionButton = memo(function ActionButton({ label, icon, color }: { label:
         style={{ alignItems: 'center' }}
       >
         <View style={styles.actionIconShell}>
-          <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 16, backgroundColor: color, opacity: 0.25 }, glowStyle]} />
+          <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 17, backgroundColor: color, opacity: 0.28 }, glowStyle]} />
           <Text style={[styles.actionIcon, { color }]}>{icon}</Text>
         </View>
         <Text style={styles.actionLabel}>{label}</Text>
@@ -327,7 +332,7 @@ const AIInsightCard = memo(function AIInsightCard() {
   return (
     <Animated.View entering={FadeInDown.delay(200).springify().damping(16)} style={styles.aiWrap}>
       <GlassPanel style={styles.aiPanel} intensity={26}>
-        <LinearGradient colors={['rgba(124,138,255,0.12)', 'rgba(181,131,255,0.05)', 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+        <LinearGradient colors={['rgba(124,138,255,0.16)', 'rgba(181,131,255,0.06)', 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
         <View style={styles.aiHeader}>
           <Animated.View style={[styles.aiIconShell, shimmerStyle]}>
             <Text style={styles.aiIcon}>◈</Text>
@@ -377,7 +382,7 @@ const AssetRow = memo(function AssetRow({
   }));
   const borderStyle = useAnimatedStyle(() => ({
     borderColor: lift.value > 0
-      ? `rgba(124,138,255,${interpolate(lift.value, [0, 1], [0.08, 0.35])})`
+      ? `rgba(124,138,255,${interpolate(lift.value, [0, 1], [0.1, 0.4])})`
       : T.glassBorder,
   }));
 
@@ -389,7 +394,7 @@ const AssetRow = memo(function AssetRow({
     : asset.price.toFixed(6);
 
   return (
-    <Animated.View entering={FadeInDown.delay(Math.min(index, 5) * 40).springify().damping(18)} style={{ marginBottom: 8 }}>
+    <Animated.View entering={FadeInDown.delay(Math.min(index, 5) * 40).springify().damping(18)} style={{ marginBottom: 9 }}>
       <TouchableOpacity
         activeOpacity={1}
         onPress={onPress}
@@ -398,7 +403,7 @@ const AssetRow = memo(function AssetRow({
       >
         <Animated.View style={[styles.assetRow, liftStyle, borderStyle]}>
           <View style={[styles.dotAccent, { backgroundColor: positive ? T.gain : T.loss }]} />
-          <View style={[styles.assetIconBg, { backgroundColor: meta.color + '14', borderColor: meta.color + '2A' }]}>
+          <View style={[styles.assetIconBg, { backgroundColor: meta.color + '16', borderColor: meta.color + '30' }]}>
             <Text style={[styles.assetIconText, { color: meta.color }]}>{meta.short.slice(0, 2)}</Text>
           </View>
           <View style={styles.assetInfo}>
@@ -420,7 +425,7 @@ const AssetRow = memo(function AssetRow({
   );
 }, assetPropsEqual);
 
-const ROW_HEIGHT = 73;
+const ROW_HEIGHT = 74;
 
 export default function Home() {
   const insets = useSafeAreaInsets();
@@ -467,7 +472,7 @@ export default function Home() {
           <Text style={styles.userName}>{user?.name ?? 'Trader'}</Text>
         </View>
         <View style={styles.topRight}>
-          <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.3)' : 'rgba(255,107,122,0.3)' }]}>
+          <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.32)' : 'rgba(255,107,122,0.32)' }]}>
             <PulseDot color={connected ? T.gain : T.loss} />
             <Text style={[styles.statusText, { color: connected ? T.gain : T.loss }]}>
               {connected ? 'LIVE' : 'OFFLINE'}
@@ -535,89 +540,91 @@ export default function Home() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
-  ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.14 },
+  ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.15 },
 
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 },
-  greeting: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.4 },
-  userName: { fontSize: 23, fontFamily: FontFamily.heading, color: T.textPri, marginTop: 3, letterSpacing: -0.3 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  greeting: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6 },
+  userName: { fontSize: 24, fontFamily: FontFamily.heading, color: T.textPri, marginTop: 4, letterSpacing: -0.4 },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, paddingVertical: 6, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.03)' },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.2 },
-  notifBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
-  notifDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: T.loss, position: 'absolute', top: 7, right: 7, borderWidth: 1, borderColor: T.bg0 },
-  notifIcon: { fontSize: 15, color: T.textSec },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.035)' },
+  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
+  notifBtn: { width: 40, height: 40, borderRadius: 14, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+  notifDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: T.loss, position: 'absolute', top: 8, right: 8, borderWidth: 1.5, borderColor: T.bg0, zIndex: 1 },
+  notifIcon: { fontSize: 16, color: T.textSec },
 
-  heroWrap: { marginBottom: 16, borderRadius: 26, shadowColor: T.accentDeep, shadowOpacity: 0.28, shadowRadius: 30, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
-  heroPanel: { borderRadius: 26, padding: 20, borderWidth: 1, borderColor: T.glassBorderHi },
-  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 22 },
-  liveTag: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: T.gainDim, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, alignSelf: 'flex-start', marginBottom: 10, borderWidth: 1, borderColor: 'rgba(61,220,151,0.18)' },
-  liveTagText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 1.4 },
-  heroValue: { fontSize: 38, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.2 },
-  heroDeltaRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 8 },
+  heroWrap: { marginBottom: 18, borderRadius: 28, shadowColor: T.accentDeep, shadowOpacity: 0.32, shadowRadius: 34, shadowOffset: { width: 0, height: 14 }, elevation: 12 },
+  heroPanel: { borderRadius: 28, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
+  heroInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 27, borderTopRightRadius: 27 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
+  liveTag: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: T.gainDim, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, alignSelf: 'flex-start', marginBottom: 11, borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)' },
+  liveTagText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 1.5 },
+  heroValue: { fontSize: 40, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.4 },
+  heroDeltaRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 9 },
   heroDelta: { fontSize: 14, fontFamily: FontFamily.heading, color: T.gain },
   heroDeltaPct: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
   heroStatsCol: { alignItems: 'flex-end' },
   heroStatItem: { alignItems: 'flex-end' },
-  heroStatLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.8, marginBottom: 3 },
+  heroStatLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.9, marginBottom: 4 },
   heroStatValue: { fontSize: 16, fontFamily: FontFamily.heading },
 
-  barsRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 56, marginBottom: 18 },
+  barsRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3.5, height: 56, marginBottom: 20 },
   barCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end' },
-  bar: { width: '100%', borderRadius: 3 },
+  bar: { width: '100%', borderRadius: 4 },
 
-  periodRow: { flexDirection: 'row', gap: 5, marginBottom: 18 },
-  periodBtn: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: T.hairline, overflow: 'hidden' },
-  periodBtnActive: { borderColor: 'transparent' },
+  periodRow: { flexDirection: 'row', gap: 6, marginBottom: 20 },
+  periodBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: T.hairline, overflow: 'hidden' },
+  periodBtnActive: { borderColor: 'transparent', shadowColor: T.accentDeep, shadowOpacity: 0.5, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   periodText: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
   periodTextActive: { color: '#fff' },
 
-  heroDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 16 },
+  heroDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 18 },
   statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
-  statCell: { alignItems: 'flex-start' },
-  statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6, marginBottom: 4 },
+  statCell: { alignItems: 'flex-start', flex: 1 },
+  statCellDivider: { borderLeftWidth: 1, borderLeftColor: T.hairline, paddingLeft: 12 },
+  statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7, marginBottom: 5 },
   statCellValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
 
-  actionsPanelWrap: { marginBottom: 14, borderRadius: 22 },
-  actionsPanel: { borderRadius: 22, paddingVertical: 18, paddingHorizontal: 10, borderWidth: 1, borderColor: T.glassBorder },
+  actionsPanelWrap: { marginBottom: 16, borderRadius: 24, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 0, height: 6 } },
+  actionsPanel: { borderRadius: 24, paddingVertical: 19, paddingHorizontal: 10, borderWidth: 1, borderColor: T.glassBorder },
   actionsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  actionIconShell: { width: 52, height: 52, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: T.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 8, overflow: 'hidden' },
-  actionIcon: { fontSize: 19, fontFamily: FontFamily.heading },
-  actionLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textSec, letterSpacing: 0.2 },
+  actionIconShell: { width: 54, height: 54, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.045)', borderWidth: 1, borderColor: T.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 9, overflow: 'hidden' },
+  actionIcon: { fontSize: 20, fontFamily: FontFamily.heading },
+  actionLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textSec, letterSpacing: 0.3 },
 
-  aiWrap: { marginBottom: 14, borderRadius: 22 },
-  aiPanel: { borderRadius: 22, padding: 17, borderWidth: 1, borderColor: T.glassBorderHi },
-  aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 12 },
-  aiIconShell: { width: 29, height: 29, borderRadius: 9, backgroundColor: 'rgba(124,138,255,0.16)', borderWidth: 1, borderColor: 'rgba(124,138,255,0.3)', justifyContent: 'center', alignItems: 'center' },
-  aiIcon: { fontSize: 13, color: T.accent },
-  aiTitle: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, flex: 1, letterSpacing: -0.1 },
-  aiLivePill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: 'rgba(124,138,255,0.12)' },
-  aiLiveText: { fontSize: 8, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 1 },
-  aiSummary: { fontSize: 12.5, fontFamily: FontFamily.body, color: T.textSec, lineHeight: 19, marginBottom: 14 },
-  aiSignalsRow: { flexDirection: 'row', gap: 8 },
-  aiSignal: { flex: 1, backgroundColor: 'rgba(255,255,255,0.025)', borderRadius: 11, padding: 10, borderWidth: 1, borderColor: T.hairline },
-  aiSignalLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 4 },
-  aiSignalValue: { fontSize: 12, fontFamily: FontFamily.heading },
+  aiWrap: { marginBottom: 16, borderRadius: 24, shadowColor: T.accent, shadowOpacity: 0.14, shadowRadius: 22, shadowOffset: { width: 0, height: 10 } },
+  aiPanel: { borderRadius: 24, padding: 18, borderWidth: 1, borderColor: T.glassBorderHi },
+  aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 13 },
+  aiIconShell: { width: 31, height: 31, borderRadius: 10, backgroundColor: 'rgba(124,138,255,0.18)', borderWidth: 1, borderColor: 'rgba(124,138,255,0.34)', justifyContent: 'center', alignItems: 'center' },
+  aiIcon: { fontSize: 14, color: T.accent },
+  aiTitle: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri, flex: 1, letterSpacing: -0.15 },
+  aiLivePill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8, backgroundColor: 'rgba(124,138,255,0.14)' },
+  aiLiveText: { fontSize: 8, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 1.1 },
+  aiSummary: { fontSize: 12.5, fontFamily: FontFamily.body, color: T.textSec, lineHeight: 19.5, marginBottom: 15 },
+  aiSignalsRow: { flexDirection: 'row', gap: 9 },
+  aiSignal: { flex: 1, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 11, borderWidth: 1, borderColor: T.hairline },
+  aiSignalLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 5 },
+  aiSignalValue: { fontSize: 12.5, fontFamily: FontFamily.heading },
 
-  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
-  sectionLabelText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2, flex: 1 },
+  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 11 },
+  sectionAccentBar: { width: 3, height: 14, borderRadius: 2, backgroundColor: T.accent },
+  sectionLabelText: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2, flex: 1 },
   seeAllBtn: {},
   seeAllText: { fontSize: 12, fontFamily: FontFamily.bodyMedium, color: T.accent },
 
-  listHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginBottom: 9 },
-  listHeaderText: { fontSize: 9, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.7 },
+  listHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginBottom: 10 },
+  listHeaderText: { fontSize: 9, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.8 },
 
-  assetRow: { flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: T.glass, borderRadius: 17, paddingVertical: 13, paddingHorizontal: 13, borderWidth: 1, borderColor: T.glassBorder },
-  dotAccent: { width: 2.5, height: 30, borderRadius: 2 },
-  assetIconBg: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
+  assetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: T.glass, borderRadius: 18, paddingVertical: 14, paddingHorizontal: 14, borderWidth: 1, borderColor: T.glassBorder, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  dotAccent: { width: 3, height: 32, borderRadius: 2 },
+  assetIconBg: { width: 42, height: 42, borderRadius: 13, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   assetIconText: { fontSize: 12, fontFamily: FontFamily.heading },
   assetInfo: { flex: 1 },
-  assetSymbol: { fontSize: 14, fontFamily: FontFamily.heading, color: T.textPri },
-  assetName: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
+  assetSymbol: { fontSize: 14.5, fontFamily: FontFamily.heading, color: T.textPri },
+  assetName: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2.5 },
   sparklinePlaceholder: { width: 58, height: 34 },
-  assetPriceCol: { alignItems: 'flex-end', gap: 5 },
+  assetPriceCol: { alignItems: 'flex-end', gap: 6 },
   assetPrice: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri },
-  changeBadge: { paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 6 },
+  changeBadge: { paddingHorizontal: 7.5, paddingVertical: 3, borderRadius: 7 },
   changeText: { fontSize: 10, fontFamily: FontFamily.heading, letterSpacing: 0.2 },
 
   emptyState: { paddingVertical: 60, alignItems: 'center', gap: 12 },
@@ -625,13 +632,13 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
 
   skeletonValue: {
-  width: 180, height: 42, borderRadius: 10,
-  backgroundColor: 'rgba(255,255,255,0.06)', marginBottom: 8,
-},
-deltaChip: {
-  backgroundColor: T.gainDim, borderRadius: 7,
-  paddingHorizontal: 8, paddingVertical: 3,
-  borderWidth: 1, borderColor: 'rgba(61,220,151,0.18)',
-  alignSelf: 'flex-start', marginTop: 6,
-},
+    width: 190, height: 44, borderRadius: 11,
+    backgroundColor: 'rgba(255,255,255,0.07)', marginBottom: 8,
+  },
+  deltaChip: {
+    backgroundColor: T.gainDim, borderRadius: 8,
+    paddingHorizontal: 9, paddingVertical: 4,
+    borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)',
+    alignSelf: 'flex-start', marginTop: 6,
+  },
 });

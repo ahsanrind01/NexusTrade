@@ -6,7 +6,7 @@ import {
   InteractionManager,
 } from 'react-native';
 import Animated, {
-  FadeIn, FadeInDown, FadeInUp,
+  FadeIn, FadeInDown,
   useSharedValue, useAnimatedStyle,
   withTiming, withSequence, withRepeat, interpolate, Easing,
   cancelAnimation,
@@ -14,14 +14,11 @@ import Animated, {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-// useIsFocused comes from @react-navigation/native, which expo-router is
-// built on top of. It's what lets us pause the pulsing "LIVE" dot animation
-// when this screen isn't the one on screen (see PulseDot below).
 import { useIsFocused } from '@react-navigation/native';
-import { FontFamily, FontSize } from '../../constants/typography';
+import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
-import { useMarketSocket } from '../../hooks/useMarketSocket';
 import { useAuthStore } from '../../stores/authStore';
+import { api } from '../../lib/api';
 
 let BlurView: any = null;
 try {
@@ -30,57 +27,33 @@ try {
   BlurView = null;
 }
 
-// Dimensions.get is called once at module load, not inside the component,
-// so it never re-runs on re-render (it also doesn't respond to runtime
-// orientation changes, but that was already true of the original code —
-// preserved as-is, not a behavior change).
 const { width } = Dimensions.get('window');
-
 const CHART_H = 220;
 const CHART_PAD = 18;
-// Hoisted to module scope: width/CHART_PAD never change at runtime, so this
-// only needs to be computed once for the whole app lifetime instead of on
-// every render of every chart component that needs it (both the line chart
-// and the candlestick chart use the same width).
 const CHART_W = width - 36 - CHART_PAD * 2;
+const MIN_VISIBLE_CANDLES = 12;
+const MAX_LOADED_CANDLES = 500;
 
-// ---------------------------------------------------------------------------
-// NOTE ON WIRING THIS SCREEN UP
-// ---------------------------------------------------------------------------
-// 1. This assumes expo-router (file at app/(tabs)/cryptoGraph.tsx per your
-//    setup). Swap useLocalSearchParams()/useRouter() for React Navigation's
-//    useRoute()/useNavigation() if you switch later.
-// 2. API_BASE points at the API Gateway (port 3000). Update it if you have
-//    a shared axios/fetch client elsewhere.
-// 3. Token field: assumes useAuthStore exposes `token`. Rename if different.
-// 4. useIsFocused requires @react-navigation/native, which expo-router
-//    depends on internally — if it's not resolvable in your project, add it
-//    as a direct dependency (`npx expo install @react-navigation/native`).
-// ---------------------------------------------------------------------------
-
-const API_BASE = 'http://localhost:3000/api';
-
-// ---- theme tokens, copied 1:1 from Home so this screen matches exactly ----
 const T = {
   bg0: '#06070A',
   bg1: '#0A0C11',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
   cyan: '#5EE7E7',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
 const SYMBOL_META: Record<string, { name: string; short: string; color: string }> = {
@@ -118,11 +91,15 @@ const PERIODS: { key: Period; interval: string; limit: number }[] = [
 type Side = 'BUY' | 'SELL';
 type OrderType = 'MARKET' | 'LIMIT';
 
-// Pure, prop/state-free helper — hoisted OUT of the component so it's
-// created exactly once for the whole app lifetime instead of being
-// redefined as a brand-new function on every render of CoinDetail
-// (a fresh function identity per render is cheap by itself, but it's
-// unnecessary allocation for a function that closes over nothing).
+interface CandleSet {
+  times: number[];
+  open: number[];
+  high: number[];
+  low: number[];
+  close: number[];
+  labels: string[];
+}
+
 function formatVolume(v: number) {
   if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
   if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
@@ -130,16 +107,27 @@ function formatVolume(v: number) {
   return `$${v.toFixed(2)}`;
 }
 
-// ---------------------------------------------------------------------------
-// Shared small components (same visual language as Home)
-// ---------------------------------------------------------------------------
+function formatLabel(time: number, period: Period) {
+  const d = new Date(time);
+  return period === '1H' || period === '1D'
+    ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function pickAxisLabels(labels: string[]) {
+  const n = labels.length;
+  if (n === 0) return [];
+  if (n <= 4) return labels;
+  const idxs = [0, Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1];
+  return idxs.map((i) => labels[i]);
+}
 
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28, tint = 'dark' }: any) {
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint={tint} style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -151,15 +139,6 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28, t
   );
 });
 
-// PulseDot now stops its infinite withRepeat loop whenever this screen isn't
-// focused (e.g. the user navigated to another tab/screen but this one is
-// still mounted in the stack) and whenever it unmounts. Reanimated's
-// withRepeat(..., -1, ...) runs forever on the UI thread until explicitly
-// cancelled — left unchecked, every backgrounded instance of this dot is
-// still scheduling frame callbacks for no visible benefit, which costs
-// battery/CPU for zero user-facing value. cancelAnimation() stops that
-// scheduling immediately; restarting it on refocus costs nothing since the
-// animation is cheap to (re)start.
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
@@ -184,15 +163,10 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
       <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ringStyle]} />
-      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }} />
+      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color, shadowColor: color, shadowOpacity: 0.9, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }} />
     </View>
   );
 });
-
-// ---------------------------------------------------------------------------
-// AmbientField — the same drifting background orbs used on Home, so this
-// screen doesn't feel visually disconnected from the rest of the app.
-// ---------------------------------------------------------------------------
 
 function AmbientField() {
   const drift = useSharedValue(0);
@@ -200,59 +174,229 @@ function AmbientField() {
 
   useEffect(() => {
     if (!isFocused) {
-      // Same reasoning as PulseDot: don't keep an infinite withRepeat loop
-      // scheduling UI-thread work while this screen is backgrounded.
       cancelAnimation(drift);
       return;
     }
-    drift.value = withRepeat(withTiming(1, { duration: 12000, easing: Easing.inOut(Easing.sin) }), -1, true);
+    drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
     return () => cancelAnimation(drift);
   }, [isFocused]);
 
   const orb1 = useAnimatedStyle(() => ({
     transform: [
-      { translateX: interpolate(drift.value, [0, 1], [-12, 14]) },
-      { translateY: interpolate(drift.value, [0, 1], [-8, 10]) },
+      { translateX: interpolate(drift.value, [0, 1], [-12, 16]) },
+      { translateY: interpolate(drift.value, [0, 1], [-10, 12]) },
     ],
   }));
   const orb2 = useAnimatedStyle(() => ({
     transform: [
-      { translateX: interpolate(drift.value, [0, 1], [10, -16]) },
-      { translateY: interpolate(drift.value, [0, 1], [6, -12]) },
+      { translateX: interpolate(drift.value, [0, 1], [12, -18]) },
+      { translateY: interpolate(drift.value, [0, 1], [8, -14]) },
+    ],
+  }));
+  const orb3 = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: interpolate(drift.value, [0, 1], [-8, 10]) },
+      { translateY: interpolate(drift.value, [0, 1], [10, -8]) },
     ],
   }));
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Animated.View style={[styles.ambientOrb, { top: -80, left: -60, backgroundColor: T.accentDeep }, orb1]} />
-      <Animated.View style={[styles.ambientOrb, { top: 140, right: -100, backgroundColor: T.violet, opacity: 0.10 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: -90, left: -70, backgroundColor: T.accentDeep }, orb1]} />
+      <Animated.View style={[styles.ambientOrb, { top: 150, right: -110, backgroundColor: T.violet, opacity: 0.09 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { bottom: 120, left: -90, width: 220, height: 220, borderRadius: 110, backgroundColor: T.cyan, opacity: 0.06 }, orb3]} />
     </View>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Price chart — same "rotated line segment" trick as Home's Sparkline, just
-// bigger, with a scrub gesture so touching/dragging shows price + time.
-// ---------------------------------------------------------------------------
+function useChartGesture({
+  totalLength,
+  chartW,
+  onEdgeReached,
+}: {
+  totalLength: number;
+  chartW: number;
+  onEdgeReached: () => void;
+}) {
+  const [windowStart, setWindowStart] = useState(0);
+  const [windowSize, setWindowSize] = useState(totalLength);
+  const [scrubIndex, setScrubIndex] = useState<number | null>(null);
+
+  const totalLengthRef = useRef(totalLength);
+  const windowStartRef = useRef(windowStart);
+  const windowSizeRef = useRef(windowSize);
+  const chartWRef = useRef(chartW);
+  const onEdgeReachedRef = useRef(onEdgeReached);
+
+  useEffect(() => { totalLengthRef.current = totalLength; }, [totalLength]);
+  useEffect(() => { windowStartRef.current = windowStart; }, [windowStart]);
+  useEffect(() => { windowSizeRef.current = windowSize; }, [windowSize]);
+  useEffect(() => { chartWRef.current = chartW; }, [chartW]);
+  useEffect(() => { onEdgeReachedRef.current = onEdgeReached; }, [onEdgeReached]);
+
+  const gestureRef = useRef({
+    mode: 'none' as 'none' | 'pinch' | 'pan' | 'scrub',
+    pinchStartDist: 0,
+    pinchStartSize: 0,
+    pinchStartCenter: 0,
+    panStartX: 0,
+    panStartWindowStart: 0,
+    lastTapTime: 0,
+  });
+
+  const resetView = useCallback((newTotal: number) => {
+    setWindowStart(0);
+    setWindowSize(newTotal);
+  }, []);
+
+  const shiftAfterPrepend = useCallback((addedCount: number) => {
+    setWindowStart((prev) => prev + addedCount);
+  }, []);
+
+  const panHandlers = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt: GestureResponderEvent) => {
+          const touches = evt.nativeEvent.touches;
+          const now = Date.now();
+          if (touches.length >= 2) {
+            const [a, b] = touches;
+            gestureRef.current.mode = 'pinch';
+            gestureRef.current.pinchStartDist = Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY) || 1;
+            gestureRef.current.pinchStartSize = windowSizeRef.current;
+            gestureRef.current.pinchStartCenter = windowStartRef.current + windowSizeRef.current / 2;
+          } else {
+            const sincePrevTap = now - gestureRef.current.lastTapTime;
+            gestureRef.current.lastTapTime = now;
+            if (sincePrevTap < 280 && windowSizeRef.current < totalLengthRef.current) {
+              resetView(totalLengthRef.current);
+              gestureRef.current.mode = 'none';
+              return;
+            }
+            gestureRef.current.mode = windowSizeRef.current < totalLengthRef.current ? 'pan' : 'scrub';
+            gestureRef.current.panStartX = touches[0]?.pageX ?? 0;
+            gestureRef.current.panStartWindowStart = windowStartRef.current;
+          }
+        },
+        onPanResponderMove: (evt: GestureResponderEvent, gestureState: PanResponderGestureState) => {
+          const touches = evt.nativeEvent.touches;
+
+          if (touches.length >= 2) {
+            if (gestureRef.current.mode !== 'pinch') {
+              const [a, b] = touches;
+              gestureRef.current.mode = 'pinch';
+              gestureRef.current.pinchStartDist = Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY) || 1;
+              gestureRef.current.pinchStartSize = windowSizeRef.current;
+              gestureRef.current.pinchStartCenter = windowStartRef.current + windowSizeRef.current / 2;
+            }
+            const [a, b] = touches;
+            const dist = Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY) || 1;
+            const ratio = dist / (gestureRef.current.pinchStartDist || 1);
+            const total = totalLengthRef.current;
+            const rawSize = gestureRef.current.pinchStartSize / ratio;
+            const newSize = Math.max(MIN_VISIBLE_CANDLES, Math.min(total, Math.round(rawSize)));
+            const center = gestureRef.current.pinchStartCenter;
+            let newStart = Math.round(center - newSize / 2);
+            newStart = Math.max(0, Math.min(total - newSize, newStart));
+            setWindowSize(newSize);
+            setWindowStart(newStart);
+            setScrubIndex(null);
+            return;
+          }
+
+          if (gestureRef.current.mode === 'scrub') {
+            const size = windowSizeRef.current;
+            if (size < 2) return;
+            const w = chartWRef.current;
+            const localX = Math.max(0, Math.min(w, gestureState.moveX - CHART_PAD - 18));
+            const step = w / (size - 1);
+            const index = Math.round(localX / step);
+            setScrubIndex(Math.max(0, Math.min(size - 1, index)));
+            return;
+          }
+
+          if (gestureRef.current.mode === 'pan') {
+            const size = windowSizeRef.current;
+            const total = totalLengthRef.current;
+            const w = chartWRef.current;
+            const pxPerCandle = w / Math.max(1, size);
+            const deltaCandles = -(gestureState.moveX - gestureRef.current.panStartX) / pxPerCandle;
+            let newStart = gestureRef.current.panStartWindowStart + deltaCandles;
+            if (newStart < 0) {
+              newStart = 0;
+              onEdgeReachedRef.current();
+            }
+            newStart = Math.min(total - size, newStart);
+            setWindowStart(Math.round(newStart));
+          }
+        },
+        onPanResponderRelease: () => {
+          gestureRef.current.mode = 'none';
+          setScrubIndex(null);
+        },
+        onPanResponderTerminate: () => {
+          gestureRef.current.mode = 'none';
+          setScrubIndex(null);
+        },
+      }),
+    [resetView]
+  );
+
+  return { windowStart, windowSize, scrubIndex, panHandlers, resetView, shiftAfterPrepend };
+}
+
+function ChartFrame({
+  maxLabel, midLabel, minLabel, xLabels, panHandlers, children, scrubLineX, tooltip, loadingMore,
+}: {
+  maxLabel: string; midLabel: string; minLabel: string; xLabels: string[];
+  panHandlers: any; children: React.ReactNode; scrubLineX: number | null;
+  tooltip: React.ReactNode; loadingMore: boolean;
+}) {
+  return (
+    <View {...panHandlers}>
+      {loadingMore && (
+        <View style={styles.loadingMoreBar}>
+          <Text style={styles.loadingMoreText}>Loading earlier data…</Text>
+        </View>
+      )}
+      <View style={styles.chartLabelsRow}>
+        <Text style={styles.chartMaxLabel}>{maxLabel}</Text>
+      </View>
+      <View style={{ width: CHART_W, height: CHART_H, marginLeft: CHART_PAD }}>
+        <View style={[styles.gridLine, { top: 0 }]} />
+        <View style={[styles.gridLine, { top: CHART_H / 2 }]} />
+        <View style={[styles.gridLine, { top: CHART_H - 1 }]} />
+        <Text style={styles.gridMidLabel}>{midLabel}</Text>
+        {children}
+        {scrubLineX !== null && <View style={[styles.scrubLine, { left: scrubLineX }]} />}
+      </View>
+      <View style={styles.chartLabelsRow}>
+        <Text style={styles.chartMinLabel}>{minLabel}</Text>
+      </View>
+      <View style={styles.xAxisRow}>
+        {xLabels.map((l, i) => (
+          <Text key={i} style={styles.xAxisLabel}>{l}</Text>
+        ))}
+      </View>
+      {tooltip}
+    </View>
+  );
+}
 
 function PriceChartBase({
-  points,
-  labels,
-  positive,
+  points, labels, positive, scrubIndex, panHandlers, loadingMore,
 }: {
-  points: number[];
-  labels: string[];
-  positive: boolean;
+  points: number[]; labels: string[]; positive: boolean;
+  scrubIndex: number | null; panHandlers: any; loadingMore: boolean;
 }) {
-  const chartW = CHART_W;
-  const [scrub, setScrub] = useState<{ x: number; index: number } | null>(null);
-
   const { segments, max, min } = useMemo(() => {
     if (points.length < 2) return { segments: null as any, max: 0, min: 0 };
     const max = Math.max(...points);
     const min = Math.min(...points);
     const range = max - min || 1;
-    const step = chartW / (points.length - 1);
+    const step = CHART_W / (points.length - 1);
     const segs = points.slice(0, -1).map((p, i) => {
       const x1 = i * step;
       const y1 = CHART_H - ((p - min) / range) * CHART_H;
@@ -263,67 +407,8 @@ function PriceChartBase({
       return { x1, y1, length, angle };
     });
     return { segments: segs, max, min };
-  }, [points, chartW]);
-  // ^ Already memoized in the original code — kept as-is. This is the
-  // expensive part (trig per point), and it now only reruns when `points`
-  // itself changes identity, which only happens when a new period's kline
-  // data arrives (see the fetch effect below), not on every re-render.
+  }, [points]);
 
-  // --- Fresh-data refs for the PanResponder -------------------------------
-  // PanResponder.create(...) builds a small internal gesture state machine
-  // and its handler closures capture whatever values are in scope AT THE
-  // MOMENT they're created. The original code called PanResponder.create()
-  // fresh on every render (only the *first* render's result was ever kept,
-  // via useRef(...).current), which had two costs:
-  //   1. Perf: a brand-new PanResponder object + closures were allocated
-  //      every single render and immediately discarded.
-  //   2. Correctness: onPanResponderMove's closure kept referencing the
-  //      `points`/`chartW` from the FIRST render forever — so scrubbing
-  //      after switching chart periods would silently use stale/wrong data.
-  // Fix: create the PanResponder exactly once (useMemo with no deps) and
-  // have its handlers read the *latest* points/chartW through refs that we
-  // keep in sync via an effect. This removes the repeated allocation and
-  // fixes the staleness in one move.
-  const pointsRef = useRef(points);
-  const chartWRef = useRef(chartW);
-  const hasSegmentsRef = useRef(!!segments);
-  useEffect(() => {
-    pointsRef.current = points;
-    chartWRef.current = chartW;
-    hasSegmentsRef.current = !!segments;
-  }, [points, chartW, segments]);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderMove: (_e: GestureResponderEvent, g: PanResponderGestureState) => {
-          if (!hasSegmentsRef.current) return;
-          const w = chartWRef.current;
-          const pts = pointsRef.current;
-          const localX = Math.max(0, Math.min(w, g.moveX - CHART_PAD - 18));
-          const step = w / (pts.length - 1);
-          const index = Math.round(localX / step);
-          setScrub({ x: index * step, index: Math.max(0, Math.min(pts.length - 1, index)) });
-        },
-        onPanResponderRelease: () => setScrub(null),
-        onPanResponderTerminate: () => setScrub(null),
-      }),
-    []
-  );
-
-  // The line itself (up to ~180 absolutely-positioned Views) is rendered
-  // into a memoized element array that only recomputes when `segments` or
-  // `positive` change. Without this, every scrub touch-move (many per
-  // second while dragging) would call `.map()` again and build brand-new
-  // style objects for EVERY segment just to update the small scrub
-  // dot/line — forcing React to redo prop-diffing across the whole line on
-  // each finger movement. Because these are plain (non-memoized) host
-  // Views, React skips re-sending a prop to native entirely when the style
-  // object reference is unchanged, so keeping this array stable during a
-  // scrub gesture avoids that native-bridge churn — this is the single
-  // biggest win for keeping the scrub gesture smooth.
   const segmentElements = useMemo(() => {
     if (!segments) return null;
     const color = positive ? T.gain : T.loss;
@@ -341,17 +426,6 @@ function PriceChartBase({
     ));
   }, [segments, positive]);
 
-  // Static gridline styles never change once the chart height constant is
-  // fixed, so build them once per mounted chart instead of recreating three
-  // small style arrays on every render.
-  const gridLineStyles = useMemo(
-    () => [
-      [styles.gridLine, { top: 0 }],
-      [styles.gridLine, { top: CHART_H / 2 }],
-      [styles.gridLine, { top: CHART_H - 1 }],
-    ],
-    []
-  );
   const chartEmptyStyle = useMemo(() => [styles.chartEmpty, { height: CHART_H }], []);
 
   if (!segments) {
@@ -363,58 +437,43 @@ function PriceChartBase({
   }
 
   const color = positive ? T.gain : T.loss;
-  const scrubPrice = scrub ? points[scrub.index] : null;
-  const scrubLabel = scrub ? labels[scrub.index] : null;
+  const step = CHART_W / (points.length - 1);
+  const scrubX = scrubIndex !== null ? scrubIndex * step : null;
+  const scrubPrice = scrubIndex !== null ? points[scrubIndex] : null;
+  const scrubLabel = scrubIndex !== null ? labels[scrubIndex] : null;
+
+  const scrubDot = scrubIndex !== null && scrubPrice !== null ? (
+    <View
+      style={[
+        styles.scrubDot,
+        { left: (scrubX ?? 0) - 5, top: CHART_H - ((scrubPrice - min) / (max - min || 1)) * CHART_H - 5, borderColor: color },
+      ]}
+    />
+  ) : null;
+
+  const tooltip = scrubPrice !== null ? (
+    <Animated.View entering={FadeIn.duration(120)} style={styles.scrubTooltip}>
+      <Text style={styles.scrubTooltipPrice}>${scrubPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text>
+      <Text style={styles.scrubTooltipTime}>{scrubLabel}</Text>
+    </Animated.View>
+  ) : null;
 
   return (
-    <View {...panResponder.panHandlers}>
-      <View style={styles.chartLabelsRow}>
-        <Text style={styles.chartMaxLabel}>{max.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text>
-      </View>
-
-      <View style={{ width: chartW, height: CHART_H, marginLeft: CHART_PAD }}>
-        {/* gridlines */}
-        <View style={gridLineStyles[0] as any} />
-        <View style={gridLineStyles[1] as any} />
-        <View style={gridLineStyles[2] as any} />
-
-        {segmentElements}
-
-        {scrub && scrubPrice !== null && (
-          <>
-            <View style={[styles.scrubLine, { left: scrub.x }]} />
-            <View
-              style={[
-                styles.scrubDot,
-                { left: scrub.x - 5, top: CHART_H - ((scrubPrice - min) / (max - min || 1)) * CHART_H - 5, borderColor: color },
-              ]}
-            />
-          </>
-        )}
-      </View>
-
-      <View style={styles.chartLabelsRow}>
-        <Text style={styles.chartMinLabel}>{min.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text>
-      </View>
-
-      {scrub && scrubPrice !== null && (
-        <Animated.View entering={FadeIn.duration(120)} style={styles.scrubTooltip}>
-          <Text style={styles.scrubTooltipPrice}>${scrubPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text>
-          <Text style={styles.scrubTooltipTime}>{scrubLabel}</Text>
-        </Animated.View>
-      )}
-    </View>
+    <ChartFrame
+      maxLabel={max.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      midLabel={((max + min) / 2).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      minLabel={min.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      xLabels={pickAxisLabels(labels)}
+      panHandlers={panHandlers}
+      scrubLineX={scrubX}
+      tooltip={tooltip}
+      loadingMore={loadingMore}
+    >
+      {segmentElements}
+      {scrubDot}
+    </ChartFrame>
   );
 }
-
-// Wrapped in memo with the DEFAULT shallow prop comparator. Since `points`
-// and `labels` are arrays, the default comparator already compares them by
-// reference (Object.is), which is exactly what we want: as long as the
-// parent's `candles` state object hasn't changed (i.e. no new period/kline
-// fetch resolved), `candles.closes`/`candles.labels` keep the same array
-// reference across re-renders, so this whole component — and all the work
-// inside it — is skipped entirely when the parent re-renders for unrelated
-// reasons (e.g. a live price tick updating the header text).
 const PriceChart = memo(PriceChartBase);
 
 const ChartPeriodTabs = memo(function ChartPeriodTabs({
@@ -430,24 +489,13 @@ const ChartPeriodTabs = memo(function ChartPeriodTabs({
     </View>
   );
 });
-// ^ Already memoized, and `onChange` is `setPeriod` passed straight from
-// useState — React guarantees state setter identity is stable across
-// renders, so this never re-renders unless `active` itself changes. No
-// further change needed here.
-
-// ---------------------------------------------------------------------------
-// Candlestick chart — OHLC bars (wick = high/low, body = open/close),
-// built with the same plain-View technique as the line chart (no svg/Skia
-// dependency added), same scrub-to-inspect gesture, same perf approach:
-// geometry + rendered elements are memoized so a scrub touch-move only
-// updates the crosshair/tooltip, never rebuilds all the candle Views.
-// ---------------------------------------------------------------------------
 
 function CandlestickChartBase({
-  open, high, low, close, labels, positive,
-}: { open: number[]; high: number[]; low: number[]; close: number[]; labels: string[]; positive: boolean }) {
-  const [scrub, setScrub] = useState<number | null>(null); // candle index
-
+  open, high, low, close, labels, positive, scrubIndex, panHandlers, loadingMore,
+}: {
+  open: number[]; high: number[]; low: number[]; close: number[]; labels: string[]; positive: boolean;
+  scrubIndex: number | null; panHandlers: any; loadingMore: boolean;
+}) {
   const { candles, max, min } = useMemo(() => {
     const n = close.length;
     if (n < 1) return { candles: null as any, max: 0, min: 0 };
@@ -473,38 +521,6 @@ function CandlestickChartBase({
     return { candles: list, max, min };
   }, [open, high, low, close]);
 
-  // Same ref-based fix/optimization as the line chart's PanResponder: build
-  // it once and read fresh geometry through refs instead of recreating it
-  // (and re-closing over stale data) on every render.
-  const candlesRef = useRef(candles);
-  const slotRef = useRef(candles?.[0]?.slot ?? 1);
-  useEffect(() => {
-    candlesRef.current = candles;
-    slotRef.current = candles?.[0]?.slot ?? 1;
-  }, [candles]);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderMove: (_e: GestureResponderEvent, g: PanResponderGestureState) => {
-          const list = candlesRef.current;
-          if (!list) return;
-          const localX = Math.max(0, Math.min(CHART_W, g.moveX - CHART_PAD - 18));
-          const index = Math.max(0, Math.min(list.length - 1, Math.floor(localX / slotRef.current)));
-          setScrub(index);
-        },
-        onPanResponderRelease: () => setScrub(null),
-        onPanResponderTerminate: () => setScrub(null),
-      }),
-    []
-  );
-
-  // Wicks + bodies for every candle, memoized so a scrub drag (which only
-  // changes the small crosshair/tooltip below) doesn't rebuild ~100+ View
-  // style objects on every touch-move frame — same reasoning as the line
-  // chart's `segmentElements`.
   const candleElements = useMemo(() => {
     if (!candles) return null;
     return candles.map((c: any, i: number) => {
@@ -528,50 +544,36 @@ function CandlestickChartBase({
     );
   }
 
-  const scrubCandle = scrub !== null ? candles[scrub] : null;
-  const scrubOhlc = scrub !== null ? { o: open[scrub], h: high[scrub], l: low[scrub], c: close[scrub] } : null;
+  const scrubCandle = scrubIndex !== null ? candles[scrubIndex] : null;
+  const scrubOhlc = scrubIndex !== null ? { o: open[scrubIndex], h: high[scrubIndex], l: low[scrubIndex], c: close[scrubIndex] } : null;
+
+  const tooltip = scrubOhlc ? (
+    <Animated.View entering={FadeIn.duration(120)} style={styles.scrubTooltip}>
+      <View style={styles.ohlcRow}>
+        <Text style={styles.ohlcLabel}>O <Text style={styles.ohlcValue}>{scrubOhlc.o.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
+        <Text style={styles.ohlcLabel}>H <Text style={styles.ohlcValue}>{scrubOhlc.h.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
+        <Text style={styles.ohlcLabel}>L <Text style={styles.ohlcValue}>{scrubOhlc.l.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
+        <Text style={styles.ohlcLabel}>C <Text style={styles.ohlcValue}>{scrubOhlc.c.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
+      </View>
+      <Text style={styles.scrubTooltipTime}>{labels[scrubIndex!]}</Text>
+    </Animated.View>
+  ) : null;
 
   return (
-    <View {...panResponder.panHandlers}>
-      <View style={styles.chartLabelsRow}>
-        <Text style={styles.chartMaxLabel}>{max.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text>
-      </View>
-
-      <View style={{ width: CHART_W, height: CHART_H, marginLeft: CHART_PAD }}>
-        <View style={[styles.gridLine, { top: 0 }]} />
-        <View style={[styles.gridLine, { top: CHART_H / 2 }]} />
-        <View style={[styles.gridLine, { top: CHART_H - 1 }]} />
-
-        {candleElements}
-
-        {scrubCandle && (
-          <View style={[styles.scrubLine, { left: scrubCandle.cx }]} />
-        )}
-      </View>
-
-      <View style={styles.chartLabelsRow}>
-        <Text style={styles.chartMinLabel}>{min.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text>
-      </View>
-
-      {scrubOhlc && (
-        <Animated.View entering={FadeIn.duration(120)} style={styles.scrubTooltip}>
-          <View style={styles.ohlcRow}>
-            <Text style={styles.ohlcLabel}>O <Text style={styles.ohlcValue}>{scrubOhlc.o.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
-            <Text style={styles.ohlcLabel}>H <Text style={styles.ohlcValue}>{scrubOhlc.h.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
-            <Text style={styles.ohlcLabel}>L <Text style={styles.ohlcValue}>{scrubOhlc.l.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
-            <Text style={styles.ohlcLabel}>C <Text style={styles.ohlcValue}>{scrubOhlc.c.toLocaleString('en-US', { maximumFractionDigits: 2 })}</Text></Text>
-          </View>
-          <Text style={styles.scrubTooltipTime}>{labels[scrub!]}</Text>
-        </Animated.View>
-      )}
-    </View>
+    <ChartFrame
+      maxLabel={max.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      midLabel={((max + min) / 2).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      minLabel={min.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      xLabels={pickAxisLabels(labels)}
+      panHandlers={panHandlers}
+      scrubLineX={scrubCandle ? scrubCandle.cx : null}
+      tooltip={tooltip}
+      loadingMore={loadingMore}
+    >
+      {candleElements}
+    </ChartFrame>
   );
 }
-
-// Default shallow-compare memo: `open`/`high`/`low`/`close`/`labels` are
-// arrays sourced from the same `candles` state object as the line chart, so
-// they keep stable references across unrelated re-renders (e.g. a live
-// price tick) and this component is skipped entirely just like PriceChart.
 const CandlestickChart = memo(CandlestickChartBase);
 
 const ChartTypeToggle = memo(function ChartTypeToggle({
@@ -598,16 +600,14 @@ const StatCell = memo(function StatCell({ label, value, color }: { label: string
   );
 });
 
-// ---------------------------------------------------------------------------
-// Trade panel — buy/sell, market/limit, quick %, place order
-// ---------------------------------------------------------------------------
-
 function TradePanelBase({
   symbol, meta, livePrice, token,
-}: { symbol: string; meta: { short: string }; livePrice: number; token?: string }) {
+}: { symbol: string; meta: { short: string }; livePrice: number; token?: string | null }) {
   const [side, setSide] = useState<Side>('BUY');
   const [orderType, setOrderType] = useState<OrderType>('MARKET');
-  const [amount, setAmount] = useState('');
+  const [amountText, setAmountText] = useState('');
+  const [totalText, setTotalText] = useState('');
+  const [activeField, setActiveField] = useState<'amount' | 'total'>('amount');
   const [limitPrice, setLimitPrice] = useState('');
   const [balances, setBalances] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -615,44 +615,47 @@ function TradePanelBase({
 
   useEffect(() => {
     if (!token) return;
-    // AbortController cancels the in-flight request if `token` changes or
-    // the panel unmounts before the response arrives — otherwise a slow
-    // response could resolve after unmount and call setState on a dead
-    // component (React warning + wasted JSON parsing for a result nobody
-    // will ever see).
     const controller = new AbortController();
-    fetch(`${API_BASE}/wallet/balance`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal })
-      .then((r) => r.json())
-      .then((d) => { if (d?.success) setBalances(d.balance ?? {}); })
+    api.get('/wallet/balance', { signal: controller.signal as any })
+      .then((r) => { if (r.data?.success) setBalances(r.data.balance ?? {}); })
       .catch(() => {});
     return () => controller.abort();
   }, [token]);
 
-  // All the per-render arithmetic (effective price, balances lookup, max
-  // amount, estimated total) is grouped into one memo so it's recomputed
-  // only when an input that actually affects it changes — not on every
-  // render of this component (e.g. not when `submitting` toggles, which
-  // used to recompute all of this for no reason since it was inline).
   const derived = useMemo(() => {
     const effectivePrice = orderType === 'MARKET' ? livePrice : (parseFloat(limitPrice) || 0);
     const baseAsset = meta.short;
     const quoteBalance = parseFloat(balances['USDT'] ?? '0');
     const baseBalance = parseFloat(balances[baseAsset] ?? '0');
-    const maxAmount = side === 'BUY'
-      ? (effectivePrice > 0 ? quoteBalance / effectivePrice : 0)
-      : baseBalance;
-    const total = (parseFloat(amount) || 0) * effectivePrice;
-    return { effectivePrice, baseAsset, quoteBalance, baseBalance, maxAmount, total };
-  }, [orderType, livePrice, limitPrice, meta.short, balances, side, amount]);
+    const parsedAmount = parseFloat(amountText) || 0;
+    const parsedTotal = parseFloat(totalText) || 0;
+    const amount = activeField === 'amount' ? parsedAmount : (effectivePrice > 0 ? parsedTotal / effectivePrice : 0);
+    const total = activeField === 'total' ? parsedTotal : parsedAmount * effectivePrice;
+    const fillPct = side === 'BUY'
+      ? (quoteBalance > 0 ? Math.min(1, total / quoteBalance) : 0)
+      : (baseBalance > 0 ? Math.min(1, amount / baseBalance) : 0);
+    const availableLabel = side === 'BUY' ? `${quoteBalance.toFixed(2)} USDT` : `${baseBalance.toFixed(6)} ${baseAsset}`;
+    return { effectivePrice, baseAsset, quoteBalance, baseBalance, amount, total, fillPct, availableLabel };
+  }, [orderType, livePrice, limitPrice, meta.short, balances, side, amountText, totalText, activeField]);
+
+  const displayAmount = activeField === 'amount' ? amountText : (derived.amount ? derived.amount.toFixed(6) : '');
+  const displayTotal = activeField === 'total' ? totalText : (derived.total ? derived.total.toFixed(2) : '');
 
   const applyPct = useCallback((pct: number) => {
-    if (!derived.maxAmount) return;
-    setAmount((derived.maxAmount * pct).toFixed(6));
-  }, [derived.maxAmount]);
+    if (side === 'BUY') {
+      const quoteAmount = derived.quoteBalance * pct;
+      setTotalText(quoteAmount ? quoteAmount.toFixed(2) : '');
+      setActiveField('total');
+    } else {
+      const baseAmount = derived.baseBalance * pct;
+      setAmountText(baseAmount ? baseAmount.toFixed(6) : '');
+      setActiveField('amount');
+    }
+  }, [side, derived.quoteBalance, derived.baseBalance]);
 
   const canSubmit = useMemo(
-    () => !submitting && parseFloat(amount) > 0 && derived.effectivePrice > 0 && !!token,
-    [submitting, amount, derived.effectivePrice, token]
+    () => !submitting && derived.amount > 0 && derived.effectivePrice > 0 && !!token,
+    [submitting, derived.amount, derived.effectivePrice, token]
   );
 
   const handleSubmit = useCallback(async () => {
@@ -660,60 +663,51 @@ function TradePanelBase({
     setSubmitting(true);
     setBanner(null);
     try {
-      const res = await fetch(`${API_BASE}/orders/place`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          asset: symbol,
-          amount: parseFloat(amount),
-          price: derived.effectivePrice,
-          side,
-        }),
+      const res = await api.post('/orders/place', {
+        asset: symbol,
+        amount: derived.amount,
+        price: derived.effectivePrice,
+        side,
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setBanner({ type: 'success', text: `${side === 'BUY' ? 'Buy' : 'Sell'} order placed · #${String(data.orderId).slice(0, 8)}` });
-        setAmount('');
+      if (res.data?.success) {
+        setBanner({ type: 'success', text: `${side === 'BUY' ? 'Buy' : 'Sell'} order placed · #${String(res.data.orderId).slice(0, 8)}` });
+        setAmountText('');
+        setTotalText('');
       } else {
-        setBanner({ type: 'error', text: data.error ?? 'Order failed. Please try again.' });
+        setBanner({ type: 'error', text: res.data?.error ?? 'Order failed. Please try again.' });
       }
-    } catch {
-      setBanner({ type: 'error', text: 'Network error placing order.' });
+    } catch (err: any) {
+      setBanner({ type: 'error', text: err.response?.data?.error ?? 'Network error placing order.' });
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, amount, derived.effectivePrice, side, symbol, token]);
+  }, [canSubmit, derived.amount, derived.effectivePrice, side, symbol]);
 
-  // Stable handlers for the Buy/Sell and Market/Limit toggles — useState
-  // setters (`setSide`, `setOrderType`) are already stable identities, so
-  // wrapping them doesn't change behavior, but it keeps the pattern
-  // consistent and makes it trivial to later extract these buttons into
-  // their own memoized subcomponents without having to touch call sites.
-  const selectBuy = useCallback(() => setSide('BUY'), []);
-  const selectSell = useCallback(() => setSide('SELL'), []);
+  const selectBuy = useCallback(() => { setSide('BUY'); setAmountText(''); setTotalText(''); }, []);
+  const selectSell = useCallback(() => { setSide('SELL'); setAmountText(''); setTotalText(''); }, []);
   const selectMarket = useCallback(() => setOrderType('MARKET'), []);
   const selectLimit = useCallback(() => setOrderType('LIMIT'), []);
+  const handleAmountChange = useCallback((t: string) => { setAmountText(t); setActiveField('amount'); }, []);
+  const handleTotalChange = useCallback((t: string) => { setTotalText(t); setActiveField('total'); }, []);
 
   return (
     <Animated.View entering={FadeInDown.delay(120).springify().damping(16)} style={styles.tradeWrap}>
-      <GlassPanel style={styles.tradePanel} intensity={26}>
-        {/* Buy / Sell */}
+      <GlassPanel style={styles.tradePanel} intensity={28}>
         <View style={styles.sideRow}>
           <TouchableOpacity
             onPress={selectBuy}
-            style={[styles.sideBtn, side === 'BUY' && { backgroundColor: T.gainDim, borderColor: 'rgba(61,220,151,0.35)' }]}
+            style={[styles.sideBtn, side === 'BUY' && { backgroundColor: T.gainDim, borderColor: 'rgba(61,220,151,0.4)' }]}
           >
             <Text style={[styles.sideBtnText, { color: side === 'BUY' ? T.gain : T.textTer }]}>Buy</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={selectSell}
-            style={[styles.sideBtn, side === 'SELL' && { backgroundColor: T.lossDim, borderColor: 'rgba(255,107,122,0.35)' }]}
+            style={[styles.sideBtn, side === 'SELL' && { backgroundColor: T.lossDim, borderColor: 'rgba(255,107,122,0.4)' }]}
           >
             <Text style={[styles.sideBtnText, { color: side === 'SELL' ? T.loss : T.textTer }]}>Sell</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Market / Limit */}
         <View style={styles.typeRow}>
           <TouchableOpacity onPress={selectMarket} style={[styles.typeTab, orderType === 'MARKET' && styles.typeTabActive]}>
             <Text style={[styles.typeTabText, orderType === 'MARKET' && styles.typeTabTextActive]}>Market</Text>
@@ -740,6 +734,11 @@ function TradePanelBase({
           </View>
         )}
 
+        <View style={styles.availableRow}>
+          <Text style={styles.availableLabel}>Available to {side === 'BUY' ? 'spend' : 'sell'}</Text>
+          <Text style={styles.availableValue}>{derived.availableLabel}</Text>
+        </View>
+
         <View style={styles.inputRow}>
           <Text style={styles.inputLabel}>Amount</Text>
           <View style={styles.inputWrap}>
@@ -748,10 +747,25 @@ function TradePanelBase({
               keyboardType="decimal-pad"
               placeholder="0.00"
               placeholderTextColor={T.textTer}
-              value={amount}
-              onChangeText={setAmount}
+              value={displayAmount}
+              onChangeText={handleAmountChange}
             />
             <Text style={styles.inputSuffix}>{derived.baseAsset}</Text>
+          </View>
+        </View>
+
+        <View style={styles.inputRow}>
+          <Text style={styles.inputLabel}>Total</Text>
+          <View style={styles.inputWrap}>
+            <TextInput
+              style={styles.input}
+              keyboardType="decimal-pad"
+              placeholder="0.00"
+              placeholderTextColor={T.textTer}
+              value={displayTotal}
+              onChangeText={handleTotalChange}
+            />
+            <Text style={styles.inputSuffix}>USDT</Text>
           </View>
         </View>
 
@@ -763,16 +777,18 @@ function TradePanelBase({
           ))}
         </View>
 
+        <View style={styles.fillTrack}>
+          <LinearGradient
+            colors={side === 'BUY' ? [T.gain, '#2FBE82'] : [T.loss, '#E85463']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            style={[styles.fillBar, { width: `${Math.round(derived.fillPct * 100)}%` }]}
+          />
+        </View>
+
         <View style={styles.tradeDivider} />
 
         <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Available</Text>
-          <Text style={styles.totalValue}>
-            {side === 'BUY' ? `${derived.quoteBalance.toFixed(2)} USDT` : `${derived.baseBalance.toFixed(6)} ${derived.baseAsset}`}
-          </Text>
-        </View>
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Est. total</Text>
+          <Text style={styles.totalLabel}>Order value</Text>
           <Text style={styles.totalValue}>{derived.total ? `$${derived.total.toFixed(2)}` : '—'}</Text>
         </View>
 
@@ -804,19 +820,7 @@ function TradePanelBase({
     </Animated.View>
   );
 }
-
-// Wrapped in memo so that when CoinDetail re-renders for reasons unrelated
-// to this panel (e.g. the chart's period tab changing, which updates
-// `candles`/`ticker` state), TradePanel is skipped entirely as long as its
-// own props (symbol, meta, livePrice, token) haven't changed. Combined with
-// `meta` being memoized in CoinDetail below (stable reference) and the
-// zustand price subscription being scoped to just this symbol, this panel
-// now only re-renders when something it actually displays has changed.
 const TradePanel = memo(TradePanelBase);
-
-// ---------------------------------------------------------------------------
-// Screen
-// ---------------------------------------------------------------------------
 
 export default function CoinDetail() {
   const insets = useSafeAreaInsets();
@@ -824,38 +828,24 @@ export default function CoinDetail() {
   const { symbol: rawSymbol } = useLocalSearchParams<{ symbol: string }>();
   const symbol = (rawSymbol ?? 'BTCUSDT').toUpperCase();
 
-  // Memoized so the fallback object literal (`{ name: symbol, ... }`) isn't
-  // reallocated every render for unknown symbols, and so `meta` keeps a
-  // stable reference across renders (needed for TradePanel's memo to work —
-  // an unstable `meta` object would defeat that memoization every time).
   const meta = useMemo(
     () => SYMBOL_META[symbol] ?? { name: symbol, short: symbol.replace('USDT', ''), color: T.accent },
     [symbol]
   );
 
-  const token = useAuthStore((s) => (s as any).token as string | undefined);
-  // ^ Already a selector — only re-renders this component when `token`
-  // itself changes, not on unrelated auth-store updates. No change needed.
-
-  // Scoped zustand selectors instead of destructuring the whole store.
-  // The original `const { prices } = useMarketStore();` subscribes to the
-  // ENTIRE prices object — since that object gets a new reference on every
-  // socket tick for ANY of the ~40 tracked symbols, this screen would
-  // re-render on every price update for every coin, not just the one being
-  // viewed. Selecting `s.prices[symbol]?.price` means React (via zustand's
-  // shallow-equality check on the selected value) only re-renders this
-  // screen when THIS symbol's price actually changes — a ~40x reduction in
-  // re-render frequency on an active market.
+  const token = useAuthStore((s) => s.token);
   const socketPrice = useMarketStore((s) => s.prices[symbol]?.price);
   const isLive = useMarketStore((s) => Boolean(s.prices[symbol]));
-  useMarketSocket();
 
   const [period, setPeriod] = useState<Period>('1D');
   const [chartType, setChartType] = useState<'candles' | 'line'>('candles');
-  const [candles, setCandles] = useState<{ open: number[]; high: number[]; low: number[]; close: number[]; labels: string[] } | null>(null);
+  const [candles, setCandles] = useState<CandleSet | null>(null);
   const [ticker, setTicker] = useState<{ high: number; low: number; volume: number; changePct: number } | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const candlesRef = useRef<CandleSet | null>(null);
+  useEffect(() => { candlesRef.current = candles; }, [candles]);
 
-  // live price: prefer the socket-fed store, fall back to last candle close
   const livePrice = useMemo(
     () => socketPrice ?? candles?.close[candles.close.length - 1] ?? 0,
     [socketPrice, candles]
@@ -863,14 +853,49 @@ export default function CoinDetail() {
 
   const handleChartTypeChange = useCallback((t: 'candles' | 'line') => setChartType(t), []);
 
+  const loadOlder = useCallback(async () => {
+    const current = candlesRef.current;
+    if (loadingMoreRef.current || !current || current.times.length === 0) return;
+    if (current.times.length >= MAX_LOADED_CANDLES) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const cfg = PERIODS.find((p) => p.key === period)!;
+      const endTime = current.times[0] - 1;
+      const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${cfg.interval}&limit=${cfg.limit}&endTime=${endTime}`);
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) return;
+      const addedCount = data.length;
+      const newTimes = data.map((k: any[]) => k[0]);
+      const newOpens = data.map((k: any[]) => parseFloat(k[1]));
+      const newHighs = data.map((k: any[]) => parseFloat(k[2]));
+      const newLows = data.map((k: any[]) => parseFloat(k[3]));
+      const newCloses = data.map((k: any[]) => parseFloat(k[4]));
+      const newLabels = data.map((k: any[]) => formatLabel(k[0], period));
+      setCandles((prev) => {
+        if (!prev) return prev;
+        return {
+          times: [...newTimes, ...prev.times],
+          open: [...newOpens, ...prev.open],
+          high: [...newHighs, ...prev.high],
+          low: [...newLows, ...prev.low],
+          close: [...newCloses, ...prev.close],
+          labels: [...newLabels, ...prev.labels],
+        };
+      });
+      chartGesture.shiftAfterPrepend(addedCount);
+    } catch {
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [period, symbol]);
+
+  const totalLength = candles?.close.length ?? 0;
+  const chartGesture = useChartGesture({ totalLength, chartW: CHART_W, onEdgeReached: loadOlder });
+
   useEffect(() => {
     let cancelled = false;
-    // AbortController: if the user flips periods quickly (1H -> 1D -> 1W),
-    // earlier in-flight requests are cancelled instead of being left to
-    // resolve later and overwrite the chart with stale data for a period
-    // the user has already navigated away from — a correctness fix that's
-    // also a perf win (no wasted JSON parsing / state updates for responses
-    // nobody needs anymore).
     const controller = new AbortController();
     const cfg = PERIODS.find((p) => p.key === period)!;
 
@@ -884,37 +909,24 @@ export default function CoinDetail() {
         const tickerData = await tickerRes.json();
         if (cancelled) return;
 
-        // Binance kline tuple: [openTime, open, high, low, close, volume, ...]
-        // Pulling all four OHLC values (not just close) is what lets the
-        // candlestick chart draw real wicks/bodies instead of a flat line.
+        const times = klineData.map((k: any[]) => k[0]);
         const opens = klineData.map((k: any[]) => parseFloat(k[1]));
         const highs = klineData.map((k: any[]) => parseFloat(k[2]));
         const lows = klineData.map((k: any[]) => parseFloat(k[3]));
         const closes = klineData.map((k: any[]) => parseFloat(k[4]));
-        const labels = klineData.map((k: any[]) => {
-          const d = new Date(k[0]);
-          return period === '1H' || period === '1D'
-            ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-            : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        });
-        setCandles({ open: opens, high: highs, low: lows, close: closes, labels });
+        const labels = klineData.map((k: any[]) => formatLabel(k[0], period));
+        setCandles({ times, open: opens, high: highs, low: lows, close: closes, labels });
         setTicker({
           high: parseFloat(tickerData.highPrice),
           low: parseFloat(tickerData.lowPrice),
           volume: parseFloat(tickerData.quoteVolume),
           changePct: parseFloat(tickerData.priceChangePercent),
         });
+        chartGesture.resetView(closes.length);
       } catch {
-        // AbortError from a cancelled request is expected and silently
-        // ignored here, matching the original code's blanket catch.
       }
     };
 
-    // Defer the fetch + JSON parsing until after this screen's push
-    // transition (and any other queued touch/animation interactions) have
-    // finished, so ~100KB+ of kline/ticker JSON parsing doesn't compete
-    // with the JS thread for frames while the screen is still animating
-    // in — the same pattern already used for sparklines in Home.tsx.
     const task = InteractionManager.runAfterInteractions(load);
 
     return () => {
@@ -924,13 +936,6 @@ export default function CoinDetail() {
     };
   }, [symbol, period]);
 
-  // All ticker/price-derived display strings grouped into a single memo so
-  // they're recomputed only when `livePrice` or `ticker` actually change —
-  // not on every render of this screen (e.g. not when TradePanel's local
-  // input state changes, since that lives in a separate component and
-  // never touches this one anyway; grouping here mainly avoids redoing all
-  // four `toLocaleString`/`toFixed` calls independently on every relevant
-  // update).
   const { priceStr, changePctLabel, positive, highLabel, lowLabel, volumeLabel } = useMemo(() => {
     const positive = (ticker?.changePct ?? 0) >= 0;
     const priceStr = livePrice
@@ -948,11 +953,24 @@ export default function CoinDetail() {
     };
   }, [livePrice, ticker]);
 
-  // Stable handlers — router methods are stable across renders already,
-  // but wrapping in useCallback keeps the pattern consistent and avoids
-  // creating a fresh closure on every render for the header's back button.
   const handleBack = useCallback(() => router.back(), [router]);
   const handlePeriodChange = useCallback((p: Period) => setPeriod(p), []);
+  const handleResetZoom = useCallback(() => chartGesture.resetView(totalLength), [chartGesture, totalLength]);
+
+  const windowed = useMemo(() => {
+    if (!candles) return null;
+    const s = chartGesture.windowStart;
+    const e = chartGesture.windowStart + chartGesture.windowSize;
+    return {
+      open: candles.open.slice(s, e),
+      high: candles.high.slice(s, e),
+      low: candles.low.slice(s, e),
+      close: candles.close.slice(s, e),
+      labels: candles.labels.slice(s, e),
+    };
+  }, [candles, chartGesture.windowStart, chartGesture.windowSize]);
+
+  const isZoomed = totalLength > 0 && chartGesture.windowSize < totalLength;
 
   return (
     <View style={styles.root}>
@@ -962,13 +980,12 @@ export default function CoinDetail() {
           contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 60 }]}
           showsVerticalScrollIndicator={false}
         >
-          {/* Header */}
           <Animated.View entering={FadeIn.duration(400)} style={styles.topBar}>
             <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
               <Text style={styles.backIcon}>‹</Text>
             </TouchableOpacity>
             <View style={styles.topBarCenter}>
-              <View style={[styles.coinIconBg, { backgroundColor: meta.color + '14', borderColor: meta.color + '2A' }]}>
+              <View style={[styles.coinIconBg, { backgroundColor: meta.color + '16', borderColor: meta.color + '30' }]}>
                 <Text style={[styles.coinIconText, { color: meta.color }]}>{meta.short.slice(0, 2)}</Text>
               </View>
               <View>
@@ -982,7 +999,6 @@ export default function CoinDetail() {
             </View>
           </Animated.View>
 
-          {/* Price */}
           <Animated.View entering={FadeInDown.delay(40).springify().damping(16)} style={styles.priceBlock}>
             <Text style={styles.priceValue}>${priceStr}</Text>
             <View style={[styles.changeBadgeBig, { backgroundColor: positive ? T.gainDim : T.lossDim }]}>
@@ -992,31 +1008,42 @@ export default function CoinDetail() {
             </View>
           </Animated.View>
 
-          {/* Chart */}
           <Animated.View entering={FadeInDown.delay(80).springify().damping(16)} style={styles.chartWrap}>
-            <GlassPanel style={styles.chartPanel} intensity={24}>
-              <ChartTypeToggle active={chartType} onChange={handleChartTypeChange} />
+            <GlassPanel style={styles.chartPanel} intensity={26}>
+              <View style={styles.chartTopRow}>
+                <ChartTypeToggle active={chartType} onChange={handleChartTypeChange} />
+                {isZoomed && (
+                  <TouchableOpacity onPress={handleResetZoom} style={styles.resetZoomBtn}>
+                    <Text style={styles.resetZoomText}>⟲ Reset</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
               {chartType === 'candles' ? (
                 <CandlestickChart
-                  open={candles?.open ?? []}
-                  high={candles?.high ?? []}
-                  low={candles?.low ?? []}
-                  close={candles?.close ?? []}
-                  labels={candles?.labels ?? []}
+                  open={windowed?.open ?? []}
+                  high={windowed?.high ?? []}
+                  low={windowed?.low ?? []}
+                  close={windowed?.close ?? []}
+                  labels={windowed?.labels ?? []}
                   positive={positive}
+                  scrubIndex={chartGesture.scrubIndex}
+                  panHandlers={chartGesture.panHandlers}
+                  loadingMore={loadingMore}
                 />
               ) : (
                 <PriceChart
-                  points={candles?.close ?? []}
-                  labels={candles?.labels ?? []}
+                  points={windowed?.close ?? []}
+                  labels={windowed?.labels ?? []}
                   positive={positive}
+                  scrubIndex={chartGesture.scrubIndex}
+                  panHandlers={chartGesture.panHandlers}
+                  loadingMore={loadingMore}
                 />
               )}
               <ChartPeriodTabs active={period} onChange={handlePeriodChange} />
             </GlassPanel>
           </Animated.View>
 
-          {/* Stats */}
           <Animated.View entering={FadeInDown.delay(100).springify().damping(16)} style={styles.statsWrap}>
             <GlassPanel style={styles.statsPanel} intensity={22}>
               <StatCell label="24H HIGH" value={highLabel} color={T.gain} />
@@ -1025,7 +1052,6 @@ export default function CoinDetail() {
             </GlassPanel>
           </Animated.View>
 
-          {/* Trade */}
           <TradePanel symbol={symbol} meta={meta} livePrice={livePrice} token={token} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -1037,49 +1063,48 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
 
-  ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.14 },
+  ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.15 },
 
-  // Header
-  topBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  topBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
   backBtn: {
-    width: 36, height: 36, borderRadius: 12,
+    width: 38, height: 38, borderRadius: 13,
     backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder,
-    justifyContent: 'center', alignItems: 'center', marginRight: 12,
+    justifyContent: 'center', alignItems: 'center', marginRight: 13,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
   },
   backIcon: { fontSize: 22, color: T.textPri, marginTop: -2 },
   topBarCenter: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  coinIconBg: { width: 36, height: 36, borderRadius: 11, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
+  coinIconBg: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   coinIconText: { fontSize: 11, fontFamily: FontFamily.heading },
-  coinSymbol: { fontSize: 15, fontFamily: FontFamily.heading, color: T.textPri },
-  coinName: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
+  coinSymbol: { fontSize: 15.5, fontFamily: FontFamily.heading, color: T.textPri },
+  coinName: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2.5 },
   statusPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20,
-    borderWidth: 1, borderColor: T.hairline, backgroundColor: 'rgba(255,255,255,0.03)',
+    paddingHorizontal: 11, paddingVertical: 7, borderRadius: 20,
+    borderWidth: 1, borderColor: T.hairline, backgroundColor: 'rgba(255,255,255,0.035)',
   },
-  statusPillText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.textSec, letterSpacing: 1 },
+  statusPillText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.textSec, letterSpacing: 1.1 },
 
-  // Price
-  priceBlock: { marginBottom: 18 },
-  priceValue: { fontSize: 34, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1 },
-  changeBadgeBig: { alignSelf: 'flex-start', marginTop: 8, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
+  priceBlock: { marginBottom: 20 },
+  priceValue: { fontSize: 36, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.1 },
+  changeBadgeBig: { alignSelf: 'flex-start', marginTop: 9, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 5 },
   changeBadgeBigText: { fontSize: 12, fontFamily: FontFamily.heading },
 
-  // Chart
-  chartWrap: { marginBottom: 14, borderRadius: 22 },
-  chartPanel: { borderRadius: 22, paddingVertical: 16, paddingHorizontal: 0, borderWidth: 1, borderColor: T.glassBorderHi },
+  chartWrap: { marginBottom: 16, borderRadius: 24, shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 8 } },
+  chartPanel: { borderRadius: 24, paddingVertical: 17, paddingHorizontal: 0, borderWidth: 1, borderColor: T.glassBorderHi },
   chartEmpty: { justifyContent: 'center', alignItems: 'center' },
   chartEmptyText: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
   chartLabelsRow: { paddingHorizontal: 18, marginBottom: 2 },
   chartMaxLabel: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, alignSelf: 'flex-end' },
   chartMinLabel: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, alignSelf: 'flex-end', marginTop: 4 },
   gridLine: { position: 'absolute', left: 0, right: 0, height: StyleSheet.hairlineWidth, backgroundColor: T.hairline },
-  scrubLine: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: 'rgba(255,255,255,0.18)' },
+  gridMidLabel: { position: 'absolute', right: 2, top: CHART_H / 2 - 12, fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, backgroundColor: T.bg0, paddingHorizontal: 3 },
+  scrubLine: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
   scrubDot: { position: 'absolute', width: 10, height: 10, borderRadius: 5, backgroundColor: T.bg0, borderWidth: 2 },
   scrubTooltip: {
-    alignSelf: 'center', marginTop: 10, backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1, borderColor: T.glassBorder, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 7, alignItems: 'center',
+    alignSelf: 'center', marginTop: 10, backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1, borderColor: T.glassBorder, borderRadius: 11,
+    paddingHorizontal: 13, paddingVertical: 8, alignItems: 'center',
   },
   scrubTooltipPrice: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
   scrubTooltipTime: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
@@ -1088,77 +1113,91 @@ const styles = StyleSheet.create({
   ohlcLabel: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, textTransform: 'uppercase' },
   ohlcValue: { fontSize: 11, fontFamily: FontFamily.heading, color: T.textPri },
 
+  xAxisRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 18, marginTop: 8 },
+  xAxisLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer },
+
+  loadingMoreBar: { alignSelf: 'center', marginBottom: 8, backgroundColor: 'rgba(124,138,255,0.14)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+  loadingMoreText: { fontSize: 9.5, fontFamily: FontFamily.bodyMedium, color: T.accent },
+
+  chartTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginRight: 18, marginBottom: 11 },
   chartTypeRow: {
-    flexDirection: 'row', gap: 4, alignSelf: 'flex-end',
-    marginRight: 18, marginBottom: 10, backgroundColor: T.glass,
-    borderRadius: 10, padding: 3, borderWidth: 1, borderColor: T.hairline,
+    flexDirection: 'row', gap: 4, backgroundColor: T.glass,
+    borderRadius: 11, padding: 3, borderWidth: 1, borderColor: T.hairline,
   },
-  chartTypeBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 7 },
-  chartTypeBtnActive: { backgroundColor: 'rgba(124,138,255,0.16)' },
+  chartTypeBtn: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 8 },
+  chartTypeBtnActive: { backgroundColor: 'rgba(124,138,255,0.18)' },
   chartTypeText: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textTer },
   chartTypeTextActive: { color: T.accent },
+
+  resetZoomBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: 'rgba(124,138,255,0.14)', borderWidth: 1, borderColor: 'rgba(124,138,255,0.3)' },
+  resetZoomText: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.accent },
 
   periodTabsRow: {
     flexDirection: 'row', justifyContent: 'space-between',
     marginTop: 16, marginHorizontal: 18, backgroundColor: T.glass,
-    borderRadius: 12, padding: 3, borderWidth: 1, borderColor: T.hairline,
+    borderRadius: 13, padding: 3, borderWidth: 1, borderColor: T.hairline,
   },
-  periodTab: { flex: 1, paddingVertical: 7, borderRadius: 9, alignItems: 'center' },
-  periodTabActive: { backgroundColor: 'rgba(124,138,255,0.16)' },
+  periodTab: { flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
+  periodTabActive: { backgroundColor: 'rgba(124,138,255,0.18)' },
   periodTabText: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
   periodTabTextActive: { color: T.accent },
 
-  // Stats
-  statsWrap: { marginBottom: 14, borderRadius: 18 },
+  statsWrap: { marginBottom: 16, borderRadius: 19, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
   statsPanel: {
-    borderRadius: 18, padding: 16, flexDirection: 'row', justifyContent: 'space-between',
+    borderRadius: 19, padding: 17, flexDirection: 'row', justifyContent: 'space-between',
     borderWidth: 1, borderColor: T.glassBorder,
   },
   statCell2: { alignItems: 'flex-start' },
-  statCell2Label: { fontSize: 8.5, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6, marginBottom: 4 },
+  statCell2Label: { fontSize: 8.5, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7, marginBottom: 5 },
   statCell2Value: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
 
-  // Trade panel
-  tradeWrap: { marginBottom: 20, borderRadius: 22 },
-  tradePanel: { borderRadius: 22, padding: 18, borderWidth: 1, borderColor: T.glassBorderHi },
-  sideRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  tradeWrap: { marginBottom: 22, borderRadius: 24, shadowColor: T.accent, shadowOpacity: 0.12, shadowRadius: 22, shadowOffset: { width: 0, height: 10 } },
+  tradePanel: { borderRadius: 24, padding: 19, borderWidth: 1, borderColor: T.glassBorderHi },
+  sideRow: { flexDirection: 'row', gap: 8, marginBottom: 15 },
   sideBtn: {
-    flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: 'center',
-    borderWidth: 1, borderColor: T.hairline, backgroundColor: 'rgba(255,255,255,0.02)',
+    flex: 1, paddingVertical: 13, borderRadius: 13, alignItems: 'center',
+    borderWidth: 1, borderColor: T.hairline, backgroundColor: 'rgba(255,255,255,0.025)',
   },
   sideBtnText: { fontSize: 13, fontFamily: FontFamily.heading },
 
-  typeRow: { flexDirection: 'row', gap: 6, marginBottom: 14 },
-  typeTab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.02)', borderWidth: 1, borderColor: T.hairline },
-  typeTabActive: { borderColor: 'rgba(124,138,255,0.4)', backgroundColor: 'rgba(124,138,255,0.1)' },
+  typeRow: { flexDirection: 'row', gap: 6, marginBottom: 15 },
+  typeTab: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.025)', borderWidth: 1, borderColor: T.hairline },
+  typeTabActive: { borderColor: 'rgba(124,138,255,0.45)', backgroundColor: 'rgba(124,138,255,0.12)' },
   typeTabText: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
   typeTabTextActive: { color: T.accent },
 
-  inputRow: { marginBottom: 10 },
-  inputLabel: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 6, letterSpacing: 0.3 },
+  availableRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 11, paddingHorizontal: 13, paddingVertical: 10, borderWidth: 1, borderColor: T.hairline },
+  availableLabel: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer },
+  availableValue: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textPri },
+
+  inputRow: { marginBottom: 11 },
+  inputLabel: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 7, letterSpacing: 0.3 },
   inputWrap: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: T.glass,
-    borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14,
+    borderRadius: 14, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 15,
   },
-  input: { flex: 1, fontSize: 15, fontFamily: FontFamily.heading, color: T.textPri, paddingVertical: 13 },
+  input: { flex: 1, fontSize: 15, fontFamily: FontFamily.heading, color: T.textPri, paddingVertical: 14 },
   inputSuffix: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
 
-  pctRow: { flexDirection: 'row', gap: 6, marginTop: 2, marginBottom: 14 },
-  pctBtn: { flex: 1, paddingVertical: 8, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.025)', borderWidth: 1, borderColor: T.hairline, alignItems: 'center' },
+  pctRow: { flexDirection: 'row', gap: 6, marginTop: 2, marginBottom: 8 },
+  pctBtn: { flex: 1, paddingVertical: 9, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: T.hairline, alignItems: 'center' },
   pctBtnText: { fontSize: 10.5, fontFamily: FontFamily.bodyMedium, color: T.textSec },
 
-  tradeDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 12 },
+  fillTrack: { height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.06)', overflow: 'hidden', marginBottom: 15 },
+  fillBar: { height: 4, borderRadius: 2 },
+
+  tradeDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 13 },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   totalLabel: { fontSize: 11.5, fontFamily: FontFamily.body, color: T.textTer },
   totalValue: { fontSize: 12.5, fontFamily: FontFamily.bodyMedium, color: T.textPri },
 
-  banner: { borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, marginTop: 4, marginBottom: 10 },
+  banner: { borderRadius: 11, paddingVertical: 10, paddingHorizontal: 13, marginTop: 4, marginBottom: 11 },
   bannerText: { fontSize: 11.5, fontFamily: FontFamily.bodyMedium, textAlign: 'center' },
 
   submitBtn: {
-    marginTop: 6, borderRadius: 14, paddingVertical: 15, alignItems: 'center',
+    marginTop: 6, borderRadius: 15, paddingVertical: 16, alignItems: 'center',
     overflow: 'hidden',
   },
   submitBtnText: { fontSize: 14, fontFamily: FontFamily.heading, color: '#fff' },
-  authHint: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center', marginTop: 10 },
+  authHint: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center', marginTop: 11 },
 });

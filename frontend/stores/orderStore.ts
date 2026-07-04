@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderStatus = 'PENDING' | 'FILLED' | 'CANCELLED' | 'PARTIAL';
+export type OrderType = 'LIMIT' | 'MARKET';
 export type TradeRole = 'MAKER' | 'TAKER';
 
 export interface Order {
@@ -12,6 +13,7 @@ export interface Order {
   price: string;
   amount: string;
   status: OrderStatus;
+  type?: OrderType;
   createdAt: string;
 }
 
@@ -46,9 +48,7 @@ export const useOrderStore = create<OrderState>((set, get) => ({
   setOrders: (orders) => set({ orders, lastFetched: Date.now() }),
 
   setTrades: (trades) => set({ trades }),
-
-  // Used for optimistic updates (e.g. right after placing an order,
-  // before the next my-orders refetch lands).
+  
   upsertOrder: (order) => {
     const existing = get().orders;
     const idx = existing.findIndex((o) => o.id === order.id);

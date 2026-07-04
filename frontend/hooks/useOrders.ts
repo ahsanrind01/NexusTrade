@@ -1,7 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '../lib/api';
-import { useOrderStore, Order, Trade, OrderSide } from '../stores/orderStore';
+import { useOrderStore, Order, Trade, OrderSide, OrderType } from '../stores/orderStore';
+
+export interface OrderBookLevel {
+  price: number;
+  amount: number;
+}
+
+export interface OrderBook {
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+}
 
 async function fetchMyOrders() {
   const res = await api.get('/orders/my-orders');
@@ -13,11 +23,17 @@ async function fetchMyTrades() {
   return res.data.trades as Trade[];
 }
 
+async function fetchOrderBook(asset: string) {
+  const res = await api.get(`/orders/orderbook/${asset}`);
+  return { bids: res.data.bids, asks: res.data.asks } as OrderBook;
+}
+
 interface PlaceOrderInput {
   asset: string;
   side: OrderSide;
   price: number;
   amount: number;
+  type?: OrderType;
 }
 
 async function placeOrderRequest(input: PlaceOrderInput) {
@@ -67,7 +83,20 @@ export function useMyTrades() {
   return query;
 }
 
-// POST /orders/place — submits a limit order to the matching engine via Kafka.
+// GET /orders/orderbook/:asset — real resting-order depth (aggregated from
+// the order-service DB, the same orders the matching-engine works through),
+// not a mock/random book. Polls fairly often since depth can move quickly.
+export function useOrderBook(asset: string) {
+  return useQuery({
+    queryKey: ['orders', 'orderbook', asset],
+    queryFn: () => fetchOrderBook(asset),
+    staleTime: 1000 * 3,
+    refetchInterval: 1000 * 4,
+    retry: 1,
+  });
+}
+
+// POST /orders/place — submits an order to the matching engine via Kafka.
 export function usePlaceOrder() {
   const queryClient = useQueryClient();
   const upsertOrder = useOrderStore((s) => s.upsertOrder);
@@ -85,9 +114,11 @@ export function usePlaceOrder() {
         price: String(variables.price),
         amount: String(variables.amount),
         status: 'PENDING',
+        type: variables.type ?? 'LIMIT',
         createdAt: new Date().toISOString(),
       });
       queryClient.invalidateQueries({ queryKey: ['orders', 'my-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['orders', 'orderbook', variables.asset] });
       queryClient.invalidateQueries({ queryKey: ['wallet-balance'] });
     },
   });

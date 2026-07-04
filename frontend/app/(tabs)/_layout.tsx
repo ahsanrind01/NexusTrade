@@ -1,5 +1,8 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
 import Animated, {
   useSharedValue, useAnimatedStyle,
@@ -12,125 +15,88 @@ try { BlurView = require('expo-blur').BlurView; } catch {}
 
 const T = {
   bg0: '#06070A',
-  glass: 'rgba(255,255,255,0.035)',
-  glassBorderHi: 'rgba(255,255,255,0.13)',
+  glassBorderHi: 'rgba(255,255,255,0.12)',
   accent: '#7C8AFF',
-  textPri: '#F4F5F7',
-  textTer: '#5B6072',
+  accentDeep: '#5B63E8',
+  violet: '#B583FF',
+  textPri: '#F7F8FA',
+  textTer: '#60657A',
 };
 
-const TABS = [
-  { name: 'index',   label: 'Home',    icon: '⌂' },
-  { name: 'market',  label: 'Market',  icon: '◈' },
-  { name: 'trade',   label: 'Trade',   icon: '⇅' },
-  { name: 'wallet',  label: 'Wallet',  icon: '◇' },
-  { name: 'profile', label: 'Profile', icon: '○' },
+const TABS: { name: string; label: string; icon: keyof typeof Ionicons.glyphMap; iconFocused: keyof typeof Ionicons.glyphMap }[] = [
+  { name: 'index', label: 'Home', icon: 'home-outline', iconFocused: 'home' },
+  { name: 'market', label: 'Market', icon: 'bar-chart-outline', iconFocused: 'bar-chart' },
+  { name: 'trade', label: 'Trade', icon: 'swap-horizontal-outline', iconFocused: 'swap-horizontal' },
+  { name: 'wallet', label: 'Wallet', icon: 'wallet-outline', iconFocused: 'wallet' },
+  { name: 'profile', label: 'Profile', icon: 'person-outline', iconFocused: 'person' },
 ];
 
-// ─── TabIcon ──────────────────────────────────────────────────────────────────
-// FIX [1]: Removed animated `color` from useAnimatedStyle — Reanimated cannot
-//          interpolate text color on the UI thread. It was silently failing and
-//          causing the press to feel broken. Color is now switched via static
-//          conditional styles, which React handles natively and instantly.
-//
-// FIX [2]: Separated the glow background animation from the pill animation.
-//          Previously both used `glowStyle` which contained a `scale` transform.
-//          That scale was expanding the iconGlowBg OUTSIDE the tab bar bounds,
-//          causing the visible "box jumping" effect. Now:
-//          - glowBg: only animates opacity (fades in/out, no transform)
-//          - pill:   only animates opacity (no scale, no transform)
-//          - icon:   only animates scale (the container, not individual elements)
-//
-// FIX [3]: `withTiming` inside `useAnimatedStyle` return object is valid but
-//          every focus change was creating new animation instances. Moved to
-//          explicit `useEffect` → `withSpring/withTiming` on shared values only.
-
-function TabIcon({ label, focused, icon }: { label: string; focused: boolean; icon: string }) {
-  const scale = useSharedValue(1);
-  const glowOpacity = useSharedValue(0);  // FIX [2]: separate from scale
+function TabIcon({ label, focused, icon, iconFocused }: { label: string; focused: boolean; icon: keyof typeof Ionicons.glyphMap; iconFocused: keyof typeof Ionicons.glyphMap }) {
+  const lift = useSharedValue(0);
 
   useEffect(() => {
-    // FIX [3]: animations only on shared values, not inside animatedStyle
-    scale.value = withSpring(focused ? 1.06 : 1, { damping: 16, stiffness: 200 });
-    glowOpacity.value = withTiming(focused ? 1 : 0, { duration: 200 });
+    lift.value = withSpring(focused ? 1 : 0, { damping: 15, stiffness: 190 });
   }, [focused]);
 
-  // Only scale the outer container — nothing else transforms
-  const containerStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+  const iconWrapStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: interpolate(lift.value, [0, 1], [0, -1]) }, { scale: interpolate(lift.value, [0, 1], [1, 1.08]) }],
   }));
-
-  // FIX [2]: glow bg only fades, never scales — this was the "box jumping outside" bug
-  const glowBgStyle = useAnimatedStyle(() => ({
-    opacity: glowOpacity.value,
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: lift.value,
+    transform: [{ scale: interpolate(lift.value, [0, 1], [0.7, 1]) }],
   }));
-
-  // FIX [2]: pill only fades, no transform
   const pillStyle = useAnimatedStyle(() => ({
-    opacity: glowOpacity.value,
-  }));
-
-  // FIX [1]: icon opacity only — no color animation via Reanimated
-  const iconOpacityStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(glowOpacity.value, [0, 1], [0.4, 1]),
+    opacity: lift.value,
+    transform: [{ scaleX: interpolate(lift.value, [0, 1], [0.3, 1]) }],
   }));
 
   return (
-    <Animated.View style={[styles.tabItem, containerStyle]}>
-      <View style={styles.iconWrap}>
-        {/* FIX [2]: glowBg uses only opacity, no scale transform */}
-        <Animated.View style={[styles.iconGlowBg, glowBgStyle]} />
-
-        {/* FIX [1]: color switched via static styles, not animated */}
-        <Animated.Text
-          style={[
-            styles.tabIcon,
-            iconOpacityStyle,
-            focused ? styles.tabIconFocused : styles.tabIconUnfocused,
-          ]}
-        >
-          {icon}
-        </Animated.Text>
-      </View>
-
-      {/* FIX [1]: label color via static conditional style */}
-      <Text
-        style={[
-          styles.tabLabel,
-          focused ? styles.tabLabelFocused : styles.tabLabelUnfocused,
-        ]}
-      >
+    <View style={styles.tabItem}>
+      <Animated.View style={[styles.iconWrap, iconWrapStyle]}>
+        <Animated.View style={[styles.iconGlow, glowStyle]} />
+        <Ionicons
+          name={focused ? iconFocused : icon}
+          size={21}
+          color={focused ? T.textPri : T.textTer}
+        />
+      </Animated.View>
+      <Text style={[styles.tabLabel, focused ? styles.tabLabelFocused : styles.tabLabelUnfocused]}>
         {label}
       </Text>
-
-      {/* FIX [2]: pill uses only opacity, no transform */}
       <Animated.View style={[styles.activePill, pillStyle]} />
-    </Animated.View>
+    </View>
   );
 }
 
-// ─── Tab bar background ───────────────────────────────────────────────────────
 function TabBarBackground() {
-  if (BlurView) {
-    return (
-      <View style={styles.tabBarBg}>
-        <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, styles.tabBarOverlay]} />
-      </View>
-    );
-  }
-  // Fallback: solid dark overlay, visually identical without blur
   return (
-    <View style={[styles.tabBarBg, styles.tabBarFallback]} />
+    <View style={styles.tabBarBg}>
+      {BlurView ? (
+        <>
+          <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, styles.tabBarOverlay]} />
+        </>
+      ) : (
+        <View style={[StyleSheet.absoluteFill, styles.tabBarFallback]} />
+      )}
+      <LinearGradient
+        colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.16)', 'rgba(255,255,255,0)']}
+        start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+        style={styles.topHairline}
+      />
+    </View>
   );
 }
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+  const barHeight = 58 + insets.bottom;
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [styles.tabBar, { height: barHeight }],
         tabBarBackground: () => <TabBarBackground />,
       }}
     >
@@ -141,7 +107,7 @@ export default function TabLayout() {
           options={{
             tabBarLabel: () => null,
             tabBarIcon: ({ focused }) => (
-              <TabIcon label={tab.label} focused={focused} icon={tab.icon} />
+              <TabIcon label={tab.label} focused={focused} icon={tab.icon} iconFocused={tab.iconFocused} />
             ),
           }}
         />
@@ -157,65 +123,61 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabBar: {
     position: 'absolute',
-    height: Platform.OS === 'ios' ? 86 : 72,
     borderTopWidth: 0,
     backgroundColor: 'transparent',
     elevation: 0,
   },
   tabBarBg: {
     flex: 1,
-    borderTopWidth: 1,
-    borderTopColor: T.glassBorderHi,
     overflow: 'hidden',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
   },
   tabBarOverlay: {
     backgroundColor: 'rgba(6,7,10,0.55)',
   },
   tabBarFallback: {
-    backgroundColor: 'rgba(6,7,10,0.92)',
+    backgroundColor: 'rgba(6,7,10,0.94)',
+  },
+  topHairline: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: 1,
   },
 
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingTop: 10,
+    marginTop: 15,
+    gap: 5,
+    paddingTop: 12,
     minWidth: 56,
   },
   iconWrap: {
     width: 40,
-    height: 34,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // FIX [2]: position absolute so it never affects layout / never "jumps out"
-  iconGlowBg: {
+  iconGlow: {
     position: 'absolute',
-    width: 40,
+    width: 34,
     height: 30,
-    borderRadius: 10,
-    backgroundColor: 'rgba(124,138,255,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(124,138,255,0.22)',
+    borderRadius: 15,
+    backgroundColor: 'rgba(124,138,255,0.16)',
   },
-  tabIcon: {
-    fontSize: 18,
-    fontFamily: FontFamily.heading,
-  },
-  tabIconFocused:   { color: T.textPri },
-  tabIconUnfocused: { color: T.textTer },
 
   tabLabel: {
-    fontSize: 9,
+    fontSize: 9.5,
     fontFamily: FontFamily.bodyMedium,
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
   },
-  tabLabelFocused:   { color: T.accent },
+  tabLabelFocused: { color: T.accent },
   tabLabelUnfocused: { color: T.textTer },
 
   activePill: {
-    width: 18,
-    height: 2.5,
+    width: 16,
+    height: 3,
     borderRadius: 2,
     backgroundColor: T.accent,
     marginTop: 1,

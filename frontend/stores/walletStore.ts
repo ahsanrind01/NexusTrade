@@ -12,7 +12,7 @@ interface WalletState {
   updateTotalUsd: (prices: Record<string, number>) => void;
 }
 
-const PRICE_MAP: Record<string, number> = {
+export const PRICE_MAP: Record<string, number> = {
   USDT: 1, USDC: 1,
   BTC: 67420, ETH: 3512, BNB: 412,
   SOL: 142, XRP: 0.52, ADA: 0.44,

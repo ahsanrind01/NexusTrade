@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
   TouchableOpacity, Dimensions, RefreshControl,
@@ -13,9 +13,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { FontFamily } from '../../constants/typography';
 import { useWallet } from '../../hooks/useWallet';
-import { useWalletStore } from '../../stores/walletStore';
+import { useWalletStore, PRICE_MAP } from '../../stores/walletStore';
+import { useMarketStore } from '../../stores/marketStore';
 import {
   useFundingHistory,
   useCreateDepositIntent,
@@ -24,37 +26,32 @@ import {
 } from '../../hooks/useFunding';
 import { useFundingStore } from '../../stores/fundingStore';
 
-// [P6] Evaluated once — avoids conditional require() inside render
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
 const HAS_BLUR = BlurView !== null;
 
 const { width } = Dimensions.get('window');
 
-// ─── Design tokens (unchanged) ────────────────────────────────────────────────
 const T = {
   bg0: '#06070A',
-  bg1: '#0A0C11',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
-  cyan: '#5EE7E7',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
-// ─── Asset metadata (unchanged) ───────────────────────────────────────────────
 const ASSET_META: Record<string, { name: string; color: string; symbol: string }> = {
   USDT:  { name: 'Tether',    color: '#26A17B', symbol: '$' },
   BTC:   { name: 'Bitcoin',   color: '#F7931A', symbol: '₿' },
@@ -67,11 +64,9 @@ const ASSET_META: Record<string, { name: string; color: string; symbol: string }
   AVAX:  { name: 'Avalanche', color: '#F06A6E', symbol: 'A' },
 };
 
-// [P7] Module-level static constants — never reallocated
 const FIAT_ASSETS = new Set(['USDT', 'USDC']);
 const MODAL_ASSETS = ['USDT', 'BTC', 'ETH', 'BNB', 'SOL'] as const;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 type HistoryItem = {
   id: string;
   type: 'DEPOSIT' | 'WITHDRAW';
@@ -81,13 +76,12 @@ type HistoryItem = {
   time: string;
 };
 
-// ─── [P1] GlassPanel — memo, HAS_BLUR checked at module level ─────────────────
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (HAS_BLUR) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -99,7 +93,6 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   );
 });
 
-// ─── [P1] PulseDot — memo: color prop never changes after mount ───────────────
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
@@ -116,11 +109,9 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   );
 });
 
-// ─── [P1] AmbientField — memo: pure decoration, never needs to re-render ──────
 const AmbientField = memo(function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
-    // [C5] Easing.sine is the correct API (not Easing.sin)
     drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
   }, []);
   const orb1 = useAnimatedStyle(() => ({
@@ -143,7 +134,6 @@ const AmbientField = memo(function AmbientField() {
   );
 });
 
-// ─── [B3] FundingModal — wired to real backend endpoints ──────────────────────
 function FundingModal({ visible, mode, onClose, onSuccess }: {
   visible: boolean;
   mode: 'deposit' | 'withdraw';
@@ -153,8 +143,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   const [asset, setAsset] = useState<typeof MODAL_ASSETS[number]>('USDT');
   const [amount, setAmount] = useState('');
 
-  // [B3,B5] Real API calls to the funding service through the gateway,
-  // via React Query mutations (see hooks/useFunding.ts).
   const createDepositIntent = useCreateDepositIntent();
   const simulateCryptoDeposit = useSimulateCryptoDeposit();
   const createWithdrawalIntent = useCreateWithdrawalIntent();
@@ -179,13 +167,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: translateY.value }] }));
   const backdropStyle = useAnimatedStyle(() => ({ opacity: backdropOp.value }));
 
-  // [B3,B5] Real API calls to the funding service through the gateway.
-  // Deposits go through a two-step flow on the backend: an intent is
-  // created first (POST /funding/deposit/intent); for on-chain assets we
-  // then immediately simulate the confirmation (POST
-  // /funding/deposit/simulate-crypto) since there's no real chain watcher
-  // in this environment. FIAT_STRIPE intents settle via the Stripe
-  // webhook instead, so no follow-up call is needed there.
   const handleSubmit = async () => {
     const parsed = parseFloat(amount);
     if (!amount || isNaN(parsed) || parsed <= 0) {
@@ -193,7 +174,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
       return;
     }
 
-    // [B5] type field: stablecoins are fiat on-ramp, everything else is on-chain
     const type = FIAT_ASSETS.has(asset) ? 'FIAT_STRIPE' : 'CRYPTO_ETH';
 
     try {
@@ -208,7 +188,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
           asset,
           amount,
           type,
-          // Mock destination for the on-chain path; a real UI would collect this.
           destinationAddress: type === 'CRYPTO_ETH' ? '0xUserProvidedDestinationAddress' : undefined,
         });
         Alert.alert('Success', 'Withdrawal request submitted.');
@@ -331,9 +310,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   );
 }
 
-// ─── [P2] AssetCard — memo with custom comparator ─────────────────────────────
-// Only re-renders when this specific asset's balance or USD value changes.
-// Without memo, every 30s balance refetch re-renders all asset cards.
 const AssetCard = memo(function AssetCard({
   asset, balance, usdValue, index,
 }: {
@@ -349,7 +325,6 @@ const AssetCard = memo(function AssetCard({
   const onPressIn = useCallback(() => { scale.value = withSpring(0.97); }, []);
   const onPressOut = useCallback(() => { scale.value = withSpring(1); }, []);
 
-  // [P5] Format only when balance/usd changes
   const balanceStr = useMemo(() => {
     if (balance < 0.001) return balance.toFixed(6);
     if (balance < 1) return balance.toFixed(4);
@@ -393,14 +368,12 @@ const AssetCard = memo(function AssetCard({
       </TouchableOpacity>
     </Animated.View>
   );
-// [P2] Custom comparator: re-render only if balance or usd value changed
 }, (prev, next) =>
   prev.asset === next.asset &&
   prev.balance === next.balance &&
   prev.usdValue === next.usdValue
 );
 
-// ─── [P3] HistoryRow — memo: history items are immutable after fetch ───────────
 const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
   const isDeposit = item.type === 'DEPOSIT';
   const isPending = item.status === 'PENDING' || item.status === 'PROCESSING';
@@ -440,10 +413,6 @@ const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem
   );
 });
 
-// ─── [B2] Transaction history is now sourced from the funding-service via
-// the useFundingHistory hook + fundingStore (see hooks/useFunding.ts).
-// This local mapper just adapts the store's FundingTransaction shape into
-// the HistoryItem shape this screen already renders.
 function toHistoryItems(transactions: ReturnType<typeof useFundingStore.getState>['transactions']): HistoryItem[] {
   return transactions.map((tx) => ({
     id: tx.id,
@@ -455,33 +424,45 @@ function toHistoryItems(transactions: ReturnType<typeof useFundingStore.getState
   }));
 }
 
-// ─── Main screen ───────────────────────────────────────────────────────────────
 export default function Wallet() {
   const insets = useSafeAreaInsets();
 
-  // [B1] Real balances via React Query + walletStore
   const { isLoading, isFetching, refetch } = useWallet();
 
-  // [B4] Read computed values from the store (setBalances computes totalUsd)
   const balances = useWalletStore((s) => s.balances);
   const totalUsd = useWalletStore((s) => s.totalUsd);
+  const marketPrices = useMarketStore((s) => s.prices);
+
+  const livePrices = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const [symbol, data] of Object.entries(marketPrices)) {
+      out[symbol.replace('USDT', '')] = data.price;
+    }
+    return out;
+  }, [marketPrices]);
 
   const [modalMode, setModalMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [modalVisible, setModalVisible] = useState(false);
   const [activeSection, setActiveSection] = useState<'assets' | 'history'>('assets');
 
-  // [B2] Real funding history via React Query + fundingStore
+  const scrollRef = useRef<ScrollView>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+      setActiveSection('assets');
+    }, [])
+  );
+
   const { isLoading: historyLoading, refetch: refetchHistory } = useFundingHistory();
   const transactions = useFundingStore((s) => s.transactions);
   const history = useMemo(() => toHistoryItems(transactions), [transactions]);
 
-  // [P5] Derive assetList from store — only recomputes when balances changes
   const assetList = useMemo(() =>
     Object.entries(balances).filter(([, v]) => v > 0),
     [balances]
   );
 
-  // [P4] Stable handler references
   const openDeposit = useCallback(() => {
     setModalMode('deposit');
     setModalVisible(true);
@@ -494,7 +475,6 @@ export default function Wallet() {
 
   const closeModal = useCallback(() => setModalVisible(false), []);
 
-  // After a successful deposit/withdraw, refetch balance and history
   const onFundingSuccess = useCallback(() => {
     refetch();
     refetchHistory();
@@ -515,6 +495,7 @@ export default function Wallet() {
       <AmbientField />
 
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 120 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -525,8 +506,7 @@ export default function Wallet() {
           />
         }
       >
-        {/* ── Header ──────────────────────────────────────────────── */}
-        <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
+                <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
           <View>
             <Text style={styles.pageLabel}>Wallet</Text>
             <Text style={styles.pageSubLabel}>Your assets & balances</Text>
@@ -536,19 +516,19 @@ export default function Wallet() {
           </TouchableOpacity>
         </Animated.View>
 
-        {/* ── Hero balance card ────────────────────────────────────── */}
-        <Animated.View entering={FadeInDown.delay(80).springify().damping(16)} style={styles.heroWrap}>
-          <GlassPanel style={styles.heroPanel} intensity={32}>
+                <Animated.View entering={FadeInDown.delay(80).springify().damping(16)} style={styles.heroWrap}>
+          <GlassPanel style={styles.heroPanel} intensity={34}>
             <LinearGradient
-              colors={['rgba(255,255,255,0.07)', 'rgba(255,255,255,0)']}
-              start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.5 }}
+              colors={['rgba(255,255,255,0.10)', 'rgba(255,255,255,0)']}
+              start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.45 }}
               style={StyleSheet.absoluteFill}
             />
             <LinearGradient
-              colors={['rgba(124,138,255,0.12)', 'transparent']}
-              start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.9 }}
+              colors={['rgba(124,138,255,0.14)', 'rgba(181,131,255,0.04)', 'transparent']}
+              start={{ x: 0.05, y: 0 }} end={{ x: 0.95, y: 0.9 }}
               style={StyleSheet.absoluteFill}
             />
+            <View style={styles.heroInnerBorder} pointerEvents="none" />
 
             <View style={styles.heroTop}>
               <View style={styles.heroBadge}>
@@ -603,8 +583,7 @@ export default function Wallet() {
           </GlassPanel>
         </Animated.View>
 
-        {/* ── Section toggle ───────────────────────────────────────── */}
-        <Animated.View entering={FadeInDown.delay(160).springify().damping(16)} style={styles.sectionToggle}>
+                <Animated.View entering={FadeInDown.delay(160).springify().damping(16)} style={styles.sectionToggle}>
           <TouchableOpacity
             onPress={handleSectionAssets}
             style={[styles.sectionBtn, activeSection === 'assets' && styles.sectionBtnActive]}
@@ -638,80 +617,75 @@ export default function Wallet() {
           </TouchableOpacity>
         </Animated.View>
 
-        {/* ── Assets section ───────────────────────────────────────── */}
-        {activeSection === 'assets' ? (
-          <View>
-            <View style={styles.sectionLabelRow}>
-              <View style={styles.sectionAccentBar} />
-              <Text style={styles.sectionLabelText}>Your Holdings</Text>
-              <View style={styles.sectionCountPill}>
-                <Text style={styles.sectionCountText}>{assetList.length}</Text>
-              </View>
+        <View style={activeSection === 'assets' ? undefined : styles.hidden}>
+          <View style={styles.sectionLabelRow}>
+            <View style={styles.sectionAccentBar} />
+            <Text style={styles.sectionLabelText}>Your Holdings</Text>
+            <View style={styles.sectionCountPill}>
+              <Text style={styles.sectionCountText}>{assetList.length}</Text>
             </View>
-
-            {isLoading ? (
-              <View style={styles.loadingState}>
-                <ActivityIndicator color={T.accent} />
-                <Text style={styles.loadingText}>Loading balances...</Text>
-              </View>
-            ) : assetList.length === 0 ? (
-              <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
-                <Text style={styles.emptyIcon}>◎</Text>
-                <Text style={styles.emptyTitle}>No Assets Yet</Text>
-                <Text style={styles.emptyText}>Add funds to get started trading</Text>
-                <TouchableOpacity style={styles.emptyBtn} onPress={openDeposit}>
-                  <LinearGradient
-                    colors={[T.accentDeep, T.violet]}
-                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                    style={styles.emptyBtnGradient}
-                  >
-                    <Text style={styles.emptyBtnText}>Add Funds →</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              </Animated.View>
-            ) : (
-              assetList.map(([asset, balance], i) => {
-                // Compute usdValue here so AssetCard's memo comparator can use it
-                const meta = ASSET_META[asset];
-                const usdValue = balance * (meta ? 1 : 0); // walletStore already has price-adjusted total; pass raw for display
-                return (
-                  <AssetCard
-                    key={asset}
-                    asset={asset}
-                    balance={balance}
-                    usdValue={usdValue}
-                    index={i}
-                  />
-                );
-              })
-            )}
           </View>
-        ) : (
-          /* ── History section ────────────────────────────────────── */
-          <View>
-            <View style={styles.sectionLabelRow}>
-              <View style={styles.sectionAccentBar} />
-              <Text style={styles.sectionLabelText}>Transaction History</Text>
+
+          {isLoading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator color={T.accent} />
+              <Text style={styles.loadingText}>Loading balances...</Text>
             </View>
+          ) : assetList.length === 0 ? (
+            <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>◎</Text>
+              <Text style={styles.emptyTitle}>No Assets Yet</Text>
+              <Text style={styles.emptyText}>Add funds to get started trading</Text>
+              <TouchableOpacity style={styles.emptyBtn} onPress={openDeposit}>
+                <LinearGradient
+                  colors={[T.accentDeep, T.violet]}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={styles.emptyBtnGradient}
+                >
+                  <Text style={styles.emptyBtnText}>Add Funds →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </Animated.View>
+          ) : (
+            assetList.map(([asset, balance], i) => {
+              const price = livePrices[asset] ?? PRICE_MAP[asset] ?? 0;
+              const usdValue = balance * price;
+              return (
+                <AssetCard
+                  key={asset}
+                  asset={asset}
+                  balance={balance}
+                  usdValue={usdValue}
+                  index={i}
+                />
+              );
+            })
+          )}
+        </View>
 
-            {historyLoading ? (
-              <View style={styles.loadingState}>
-                <ActivityIndicator color={T.accent} />
-                <Text style={styles.loadingText}>Loading history...</Text>
-              </View>
-            ) : history.length === 0 ? (
-              <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
-                <Text style={styles.emptyIcon}>◎</Text>
-                <Text style={styles.emptyTitle}>No Transactions</Text>
-                <Text style={styles.emptyText}>Your deposits and withdrawals will appear here</Text>
-              </Animated.View>
-            ) : (
-              history.map((item, i) => (
-                <HistoryRow key={item.id} item={item} index={i} />
-              ))
-            )}
+        <View style={activeSection === 'history' ? undefined : styles.hidden}>
+          <View style={styles.sectionLabelRow}>
+            <View style={styles.sectionAccentBar} />
+            <Text style={styles.sectionLabelText}>Transaction History</Text>
           </View>
-        )}
+
+          {historyLoading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator color={T.accent} />
+              <Text style={styles.loadingText}>Loading history...</Text>
+            </View>
+          ) : history.length === 0 ? (
+            <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>◎</Text>
+              <Text style={styles.emptyTitle}>No Transactions</Text>
+              <Text style={styles.emptyText}>Your deposits and withdrawals will appear here</Text>
+            </Animated.View>
+          ) : (
+            history.map((item, i) => (
+              <HistoryRow key={item.id} item={item} index={i} />
+            ))
+          )}
+        </View>
       </ScrollView>
 
       <FundingModal
@@ -724,9 +698,9 @@ export default function Wallet() {
   );
 }
 
-// ─── Styles (not a single value changed from original) ───────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
+  hidden: { display: 'none' },
   scroll: { paddingHorizontal: 18 },
   ambientOrb: { position: 'absolute', width: 260, height: 260, borderRadius: 130, opacity: 0.13 },
 
@@ -742,10 +716,11 @@ const styles = StyleSheet.create({
 
   heroWrap: {
     marginBottom: 16, borderRadius: 26,
-    shadowColor: T.accentDeep, shadowOpacity: 0.24, shadowRadius: 28, shadowOffset: { width: 0, height: 10 },
-    elevation: 10,
+    shadowColor: T.accentDeep, shadowOpacity: 0.32, shadowRadius: 34, shadowOffset: { width: 0, height: 14 },
+    elevation: 12,
   },
   heroPanel: { borderRadius: 26, padding: 20, borderWidth: 1, borderColor: T.glassBorderHi },
+  heroInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 25, borderTopRightRadius: 25 },
   heroTop: { marginBottom: 18 },
   heroBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 6,

@@ -1,59 +1,51 @@
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, FlatList,
-  TouchableOpacity, Dimensions, TextInput,
+  TouchableOpacity, TextInput,
   KeyboardAvoidingView, Platform, Keyboard,
   TouchableWithoutFeedback, Alert, ActivityIndicator,
   ListRenderItemInfo,
 } from 'react-native';
 import Animated, {
-  FadeIn, FadeInDown, FadeInUp, FadeInRight,
+  FadeIn, FadeInDown,
   useSharedValue, useAnimatedStyle,
   withSpring, withTiming, withSequence, withRepeat,
-  interpolate, Easing, runOnJS,
+  interpolate, Easing,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useMarketSocket } from '../../hooks/useMarketSocket';
 import { useWallet } from '../../hooks/useWallet';
 import { useWalletStore } from '../../stores/walletStore';
-import { useMyOrders, useMyTrades, usePlaceOrder, useCancelOrder } from '../../hooks/useOrders';
+import { useMyOrders, useMyTrades, usePlaceOrder, useCancelOrder, useOrderBook, OrderBook } from '../../hooks/useOrders';
 import { useOrderStore, Trade as TradeFill, TradeRole } from '../../stores/orderStore';
 
-// ─── Blur fallback ────────────────────────────────────────────────────────────
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch { BlurView = null; }
 
-const { width } = Dimensions.get('window');
-
-// ─── Design tokens (identical to Home) ───────────────────────────────────────
 const T = {
   bg0: '#06070A',
-  bg1: '#0A0C11',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
-  cyan: '#5EE7E7',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
-// ─── Tradeable pairs (matches backend + SYMBOL_META) ─────────────────────────
-// Deduped once at module scope, instead of filtering on every render.
-// (Previous list had a duplicate SOLUSDT entry — removed here.)
 const PAIRS: Array<{ symbol: string; base: string; quote: string; color: string }> = [
   { symbol: 'BTCUSDT',  base: 'BTC',  quote: 'USDT', color: '#F7931A' },
   { symbol: 'ETHUSDT',  base: 'ETH',  quote: 'USDT', color: '#8FA3FF' },
@@ -73,6 +65,7 @@ const PAIRS: Array<{ symbol: string; base: string; quote: string; color: string 
 
 type OrderSide = 'BUY' | 'SELL';
 type OrderStatus = 'PENDING' | 'FILLED' | 'CANCELLED' | 'PARTIAL';
+type OrderKind = 'LIMIT' | 'MARKET';
 
 interface Order {
   id: string;
@@ -81,21 +74,16 @@ interface Order {
   price: string;
   amount: string;
   status: OrderStatus;
+  type?: OrderKind;
   createdAt: string;
 }
 
-// Wallet balances are now sourced from stores/walletStore (WalletBalance is defined there).
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-// memo: GlassPanel is purely presentational; without memo it re-renders (and
-// re-touches its native BlurView) every time its parent re-renders, which
-// happened very often before the Zustand-selector fixes below.
-const GlassPanel = memo(function GlassPanel({ style, children, intensity = 24 }: any) {
+const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.50)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -103,8 +91,6 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 24 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
-// memo: only depends on `color`; its animation is fully self-contained via
-// shared values, so parent re-renders shouldn't touch it at all.
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
@@ -121,9 +107,6 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   );
 });
 
-// ─── Price ticker (flashing on update) ───────────────────────────────────────
-// Zustand fix: select only this symbol's price instead of the whole store,
-// so a tick for another pair never re-renders this component.
 function LivePriceTicker({ symbol, color }: { symbol: string; color: string }) {
   const price = useMarketStore((s) => s.prices[symbol]?.price ?? 0);
   const flash = useSharedValue(0);
@@ -155,11 +138,6 @@ function LivePriceTicker({ symbol, color }: { symbol: string; color: string }) {
   );
 }
 
-// ─── Pair selector pill ───────────────────────────────────────────────────────
-// Zustand fix: only subscribes to this pair's own price, and only actually
-// needs it when selected (unselected pills don't render a price at all).
-// memo fix: custom comparator ignores onSelect's identity (a new closure is
-// created each render in the parent) so the memo isn't defeated by that.
 function PairPillBase({ pair, selected, onSelect }: { pair: typeof PAIRS[0]; selected: boolean; onSelect: () => void }) {
   const scale = useSharedValue(1);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -196,29 +174,47 @@ const PairPill = memo(PairPillBase, (prev, next) =>
   prev.pair.symbol === next.pair.symbol && prev.selected === next.selected
 );
 
-// ─── Order book mock visualization ───────────────────────────────────────────
-// useMemo fix: the random levels were previously recomputed (with Math.random
-// calls) on every single render. Now they only regenerate when the symbol
-// changes or price moves by roughly one spread-width, not on every tick.
-function MiniOrderBook({ symbol, currentPrice }: { symbol: string; currentPrice: number }) {
-  const levels = 6;
-  const priceBucket = Math.round(currentPrice / (currentPrice * 0.002 || 1));
+function MiniOrderBook({
+  book, loading, currentPrice,
+}: {
+  book: OrderBook | undefined;
+  loading: boolean;
+  currentPrice: number;
+}) {
+  const bids = book?.bids ?? [];
+  const asks = book?.asks ?? [];
 
-  const { asks, bids, spread } = useMemo(() => {
-    const spread = currentPrice * 0.0004;
-    const asks = Array.from({ length: levels }, (_, i) => ({
-      price: currentPrice + spread * (i + 1),
-      amount: (Math.random() * 2 + 0.1).toFixed(4),
-      pct: Math.random(),
-    })).reverse();
-    const bids = Array.from({ length: levels }, (_, i) => ({
-      price: currentPrice - spread * (i + 1),
-      amount: (Math.random() * 2 + 0.1).toFixed(4),
-      pct: Math.random(),
-    }));
-    return { asks, bids, spread };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, priceBucket]);
+  const displayAsks = useMemo(() => [...asks].reverse(), [asks]);
+
+  const maxAmount = useMemo(() => {
+    const all = [...asks, ...bids].map((l) => l.amount);
+    return all.length ? Math.max(...all) : 1;
+  }, [asks, bids]);
+
+  const bestAsk = asks[0]?.price;
+  const bestBid = bids[0]?.price;
+  const spread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
+
+  const fmt = (p: number) => (p >= 1000 ? p.toLocaleString('en-US', { maximumFractionDigits: 2 }) : p.toFixed(4));
+
+  if (loading && asks.length === 0 && bids.length === 0) {
+    return (
+      <View style={styles.obLoadingState}>
+        <ActivityIndicator color={T.accent} size="small" />
+        <Text style={styles.obLoadingText}>Loading order book...</Text>
+      </View>
+    );
+  }
+
+  if (asks.length === 0 && bids.length === 0) {
+    return (
+      <View style={styles.obEmptyState}>
+        <Text style={styles.obEmptyIcon}>◎</Text>
+        <Text style={styles.obEmptyText}>No open orders for this pair yet</Text>
+        <Text style={styles.obEmptySubText}>Be the first to place one</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.orderBook}>
@@ -226,39 +222,30 @@ function MiniOrderBook({ symbol, currentPrice }: { symbol: string; currentPrice:
         <Text style={styles.obLabel}>Price</Text>
         <Text style={[styles.obLabel, { textAlign: 'right' }]}>Amount</Text>
       </View>
-      {asks.map((a, i) => (
-        <View key={`ask-${i}`} style={styles.obRow}>
-          <View style={[styles.obFill, { width: `${a.pct * 100}%`, backgroundColor: T.loss + '1A' }]} />
-          <Text style={[styles.obPrice, { color: T.loss }]}>
-            {a.price >= 1000 ? a.price.toLocaleString('en-US', { maximumFractionDigits: 2 }) : a.price.toFixed(4)}
-          </Text>
-          <Text style={styles.obAmount}>{a.amount}</Text>
+      {displayAsks.map((a, i) => (
+        <View key={`ask-${a.price}-${i}`} style={styles.obRow}>
+          <View style={[styles.obFill, { width: `${(a.amount / maxAmount) * 100}%`, backgroundColor: T.loss + '1A' }]} />
+          <Text style={[styles.obPrice, { color: T.loss }]}>{fmt(a.price)}</Text>
+          <Text style={styles.obAmount}>{a.amount.toFixed(4)}</Text>
         </View>
       ))}
       <View style={styles.obSpread}>
         <Text style={styles.obSpreadLabel}>Spread</Text>
         <Text style={[styles.obSpreadValue, { color: T.gold }]}>
-          ${(spread * 2).toFixed(currentPrice >= 100 ? 2 : 4)}
+          {spread != null ? `$${spread.toFixed(currentPrice >= 100 ? 2 : 4)}` : '—'}
         </Text>
       </View>
       {bids.map((b, i) => (
-        <View key={`bid-${i}`} style={styles.obRow}>
-          <View style={[styles.obFill, { width: `${b.pct * 100}%`, backgroundColor: T.gain + '1A' }]} />
-          <Text style={[styles.obPrice, { color: T.gain }]}>
-            {b.price >= 1000 ? b.price.toLocaleString('en-US', { maximumFractionDigits: 2 }) : b.price.toFixed(4)}
-          </Text>
-          <Text style={styles.obAmount}>{b.amount}</Text>
+        <View key={`bid-${b.price}-${i}`} style={styles.obRow}>
+          <View style={[styles.obFill, { width: `${(b.amount / maxAmount) * 100}%`, backgroundColor: T.gain + '1A' }]} />
+          <Text style={[styles.obPrice, { color: T.gain }]}>{fmt(b.price)}</Text>
+          <Text style={styles.obAmount}>{b.amount.toFixed(4)}</Text>
         </View>
       ))}
     </View>
   );
 }
 
-// ─── Order row ────────────────────────────────────────────────────────────────
-// memo: `order` objects are stable between renders unless orders are
-// re-fetched, so this only needs to re-render when its own order changes.
-// `onCancel` / `cancelling` let the parent own the DELETE /orders/:orderId
-// mutation (via useCancelOrder) while this component stays presentational.
 const OrderRow = memo(function OrderRow({
   order, index, onCancel, cancelling,
 }: {
@@ -277,6 +264,7 @@ const OrderRow = memo(function OrderRow({
   const price = parseFloat(order.price);
   const amount = parseFloat(order.amount);
   const isCancellable = order.status === 'PENDING' || order.status === 'PARTIAL';
+  const isMarket = order.type === 'MARKET';
 
   return (
     <Animated.View entering={FadeInDown.delay(Math.min(index, 14) * 25).springify().damping(18)} style={styles.orderRow}>
@@ -284,7 +272,14 @@ const OrderRow = memo(function OrderRow({
         <Text style={[styles.orderSideText, { color: sideColor }]}>{order.side}</Text>
       </View>
       <View style={{ flex: 1, marginLeft: 10 }}>
-        <Text style={styles.orderAsset}>{order.asset.replace('USDT', '')} / USDT</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text style={styles.orderAsset}>{order.asset.replace('USDT', '')} / USDT</Text>
+          {isMarket && (
+            <View style={styles.orderTypeBadge}>
+              <Text style={styles.orderTypeBadgeText}>MARKET</Text>
+            </View>
+          )}
+        </View>
         <Text style={styles.orderMeta}>
           {amount.toFixed(4)} @ ${price >= 1000 ? price.toLocaleString('en-US', { maximumFractionDigits: 2 }) : price.toFixed(4)}
         </Text>
@@ -315,9 +310,6 @@ const OrderRow = memo(function OrderRow({
   );
 });
 
-// ─── Trade (fill) row ─────────────────────────────────────────────────────────
-// memo: same rationale as OrderRow — trade objects are stable between
-// GET /orders/my-trades refetches.
 const TradeRow = memo(function TradeRow({ trade, index }: { trade: TradeFill; index: number }) {
   const roleColor: Record<TradeRole, string> = { MAKER: T.accent, TAKER: T.gold };
   const sideColor = trade.side === 'BUY' ? T.gain : T.loss;
@@ -347,9 +339,6 @@ const TradeRow = memo(function TradeRow({ trade, index }: { trade: TradeFill; in
   );
 });
 
-// ─── Ambient background ───────────────────────────────────────────────────────
-// memo: takes no props at all, so it should never re-render due to Trade's
-// state changes — only its own internal shared-value animation should run.
 const AmbientField = memo(function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
@@ -375,23 +364,30 @@ const AmbientField = memo(function AmbientField() {
   );
 });
 
-// ─── Main Trade Screen ────────────────────────────────────────────────────────
 export default function Trade() {
   const insets = useSafeAreaInsets();
 
   useMarketSocket();
 
-  // ── State ──────────────────────────────────────────────────────────────────
   const [selectedPair, setSelectedPair] = useState(PAIRS[0]);
   const [side, setSide] = useState<OrderSide>('BUY');
+  const [orderKind, setOrderKind] = useState<OrderKind>('LIMIT');
   const [priceInput, setPriceInput] = useState('');
   const [amountInput, setAmountInput] = useState('');
   const [activeTab, setActiveTab] = useState<'trade' | 'orders' | 'trades'>('trade');
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
-  // ── Wallet & orders, via the shared hooks/stores (same ones the Wallet
-  // screen uses) instead of ad-hoc fetch() calls with a manually attached
-  // token — the `api` client already injects auth from authStore.
+  const scrollRef = useRef<ScrollView>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+      setActiveTab('trade');
+    }, [])
+  );
+
+  const { data: orderBook, isLoading: loadingBook } = useOrderBook(selectedPair.symbol);
+
   const { refetch: refetchWallet } = useWallet();
   const walletBalances = useWalletStore((s) => s.balances);
 
@@ -404,8 +400,6 @@ export default function Trade() {
   const placeOrder = usePlaceOrder();
   const submitting = placeOrder.isPending;
 
-  // DELETE /orders/:orderId — tracked per-order so only the row being
-  // cancelled shows a spinner, not the whole list.
   const cancelOrder = useCancelOrder();
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const handleCancelOrder = useCallback((orderId: string) => {
@@ -418,12 +412,9 @@ export default function Trade() {
     });
   }, [cancelOrder]);
 
-  // Selected pair's live price and connection flag, each scoped narrowly.
   const selectedLivePrice = useMarketStore((s) => s.prices[selectedPair.symbol]?.price ?? 0);
   const connected = useMarketStore((s) => s.connected);
 
-  // Auto-fill price input with the live price exactly once per pair
-  // selection, instead of re-checking (and mostly no-op'ing) on every tick.
   const hasAutoFilledRef = useRef(false);
 
   useEffect(() => {
@@ -446,12 +437,17 @@ export default function Trade() {
   const fetchOrders = useCallback(() => { refetchOrders(); }, [refetchOrders]);
   const fetchTrades = useCallback(() => { refetchTrades(); }, [refetchTrades]);
 
-  // ── Computed ───────────────────────────────────────────────────────────────
+  const marketRefPrice = useMemo(() => {
+    if (!orderBook) return 0;
+    const level = side === 'BUY' ? orderBook.asks[0] : orderBook.bids[0];
+    return level?.price ?? 0;
+  }, [orderBook, side]);
+
   const totalValue = useMemo(() => {
-    const p = parseFloat(priceInput) || 0;
+    const p = orderKind === 'MARKET' ? marketRefPrice : (parseFloat(priceInput) || 0);
     const a = parseFloat(amountInput) || 0;
     return (p * a).toFixed(2);
-  }, [priceInput, amountInput]);
+  }, [orderKind, marketRefPrice, priceInput, amountInput]);
 
   const usdtBalance = walletBalances['USDT'] ?? 0;
   const baseBalance = walletBalances[selectedPair.base] ?? 0;
@@ -459,40 +455,64 @@ export default function Trade() {
   const quickAmountPcts = useMemo(() => [0.25, 0.5, 0.75, 1.0], []);
 
   const handleQuickPct = useCallback((pct: number) => {
-    const price = parseFloat(priceInput) || selectedLivePrice;
+    const price = orderKind === 'MARKET' ? (marketRefPrice || selectedLivePrice) : (parseFloat(priceInput) || selectedLivePrice);
     if (side === 'BUY' && usdtBalance > 0 && price > 0) {
       const maxAmount = (usdtBalance * pct) / price;
       setAmountInput(maxAmount.toFixed(6));
     } else if (side === 'SELL' && baseBalance > 0) {
       setAmountInput((baseBalance * pct).toFixed(6));
     }
-  }, [priceInput, selectedLivePrice, side, usdtBalance, baseBalance]);
+  }, [orderKind, marketRefPrice, priceInput, selectedLivePrice, side, usdtBalance, baseBalance]);
 
-  // ── Submit order → POST /api/orders/place ──────────────────────────────────
+  const MARKET_SLIPPAGE = 0.02;
+
   const handlePlaceOrder = useCallback(async () => {
-    const price = parseFloat(priceInput);
     const amount = parseFloat(amountInput);
 
-    if (!price || !amount || price <= 0 || amount <= 0) {
-      Alert.alert('Invalid Order', 'Please enter a valid price and amount.');
+    if (!amount || amount <= 0) {
+      Alert.alert('Invalid Order', 'Please enter a valid amount.');
       return;
     }
 
+    let executionPrice: number;
+
+    if (orderKind === 'MARKET') {
+      if (!marketRefPrice || marketRefPrice <= 0) {
+        Alert.alert('No Liquidity', `There are no resting ${side === 'BUY' ? 'sell' : 'buy'} orders to match against right now.`);
+        return;
+      }
+      executionPrice = side === 'BUY'
+        ? marketRefPrice * (1 + MARKET_SLIPPAGE)
+        : marketRefPrice * (1 - MARKET_SLIPPAGE);
+    } else {
+      const price = parseFloat(priceInput);
+      if (!price || price <= 0) {
+        Alert.alert('Invalid Order', 'Please enter a valid price and amount.');
+        return;
+      }
+      executionPrice = price;
+    }
+
     try {
-      await placeOrder.mutateAsync({ asset: selectedPair.symbol, side, price, amount });
+      await placeOrder.mutateAsync({
+        asset: selectedPair.symbol,
+        side,
+        price: executionPrice,
+        amount,
+        type: orderKind,
+      });
       setSubmitSuccess(true);
       setAmountInput('');
       setTimeout(() => setSubmitSuccess(false), 2000);
     } catch (err: any) {
       Alert.alert('Order Failed', err.response?.data?.error ?? 'Could not reach the order service.');
     }
-  }, [priceInput, amountInput, selectedPair.symbol, side, placeOrder]);
+  }, [orderKind, amountInput, priceInput, marketRefPrice, selectedPair.symbol, side, placeOrder]);
 
   const handlePairSelect = useCallback((pair: typeof PAIRS[0]) => {
     setSelectedPair(pair);
   }, []);
 
-  // ── Button animations ──────────────────────────────────────────────────────
   const btnScale = useSharedValue(1);
   const btnStyle = useAnimatedStyle(() => ({ transform: [{ scale: btnScale.value }] }));
 
@@ -504,16 +524,21 @@ export default function Trade() {
   }, [submitSuccess]);
   const successStyle = useAnimatedStyle(() => ({ opacity: successOpacity.value }));
 
-  // ── Side toggle ────────────────────────────────────────────────────────────
   const sideOffset = useSharedValue(0);
   useEffect(() => {
     sideOffset.value = withSpring(side === 'BUY' ? 0 : 1, { damping: 18 });
   }, [side]);
-  const sideIndicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(sideOffset.value, [0, 1], [0, (width - 36) / 2 - 4]) }],
-  }));
 
-  // ── Orders list rendering (FlatList) ──────────────────────────────────────
+  const [toggleWidth, setToggleWidth] = useState(0);
+  const indicatorWidth = toggleWidth > 0 ? (toggleWidth - 8) / 2 : 0;
+  const handleToggleLayout = useCallback((e: any) => {
+    setToggleWidth(e.nativeEvent.layout.width);
+  }, []);
+
+  const sideIndicatorStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(sideOffset.value, [0, 1], [0, indicatorWidth]) }],
+  }), [indicatorWidth]);
+
   const renderOrderItem = useCallback(({ item, index }: ListRenderItemInfo<Order>) => (
     <OrderRow
       order={item}
@@ -549,7 +574,6 @@ export default function Trade() {
     )
   ), [loadingOrders]);
 
-  // ── Trades (fills) list rendering — GET /orders/my-trades ──────────────────
   const renderTradeItem = useCallback(({ item, index }: ListRenderItemInfo<TradeFill>) => (
     <TradeRow trade={item} index={index} />
   ), []);
@@ -586,13 +610,13 @@ export default function Trade() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <ScrollView
+            ref={scrollRef}
             contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 120 }]}
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
           >
-            {/* ── Header ──────────────────────────────────────── */}
-            <Animated.View entering={FadeIn.delay(40).duration(400)} style={styles.topBar}>
+                        <Animated.View entering={FadeIn.delay(40).duration(400)} style={styles.topBar}>
               <View>
                 <Text style={styles.screenLabel}>Trading Terminal</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
@@ -610,8 +634,7 @@ export default function Trade() {
               </View>
             </Animated.View>
 
-            {/* ── Pair Selector ────────────────────────────────── */}
-            <Animated.View entering={FadeInDown.delay(60).springify().damping(18)}>
+                        <Animated.View entering={FadeInDown.delay(60).springify().damping(18)}>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -628,8 +651,7 @@ export default function Trade() {
               </ScrollView>
             </Animated.View>
 
-            {/* ── Wallet balances ──────────────────────────────── */}
-            <Animated.View entering={FadeInDown.delay(90).springify().damping(18)} style={styles.walletStrip}>
+                        <Animated.View entering={FadeInDown.delay(90).springify().damping(16)} style={styles.walletStrip}>
               <GlassPanel style={styles.walletPanel}>
                 <LinearGradient
                   colors={['rgba(255,255,255,0.04)', 'transparent']}
@@ -658,8 +680,7 @@ export default function Trade() {
               </GlassPanel>
             </Animated.View>
 
-            {/* ── Tab bar: Trade / Orders / Trades ─────────────── */}
-            <Animated.View entering={FadeInDown.delay(110).springify().damping(18)} style={styles.tabBarWrap}>
+                        <Animated.View entering={FadeInDown.delay(110).springify().damping(16)} style={styles.tabBarWrap}>
               <GlassPanel style={styles.tabBar}>
                 <View style={styles.tabsGroup}>
                   {(['trade', 'orders', 'trades'] as const).map((t) => (
@@ -688,29 +709,24 @@ export default function Trade() {
               </GlassPanel>
             </Animated.View>
 
-            {/*
-              Tab content fix: both branches stay mounted at all times and are
-              toggled with `display: none` instead of being conditionally
-              rendered. Conditional rendering previously destroyed and rebuilt
-              the entire "trade" subtree (including native BlurView instances,
-              which are expensive to initialize) on every tab switch — that
-              mount/unmount churn was the actual cause of tab-switch lag.
-              With display:none, switching tabs is just a cheap visibility flip.
-            */}
-            <View style={activeTab === 'trade' ? undefined : styles.hidden}>
-              {/* ── Order form ────────────────────────────────── */}
-              <Animated.View entering={FadeInDown.delay(130).springify().damping(18)} style={styles.formCard}>
+                        <View style={activeTab === 'trade' ? undefined : styles.hidden}>
+                            <Animated.View entering={FadeInDown.delay(130).springify().damping(16)} style={styles.formCard}>
                 <GlassPanel style={styles.formPanel}>
                   <LinearGradient
-                    colors={['rgba(255,255,255,0.055)', 'transparent']}
-                    start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.3 }}
+                    colors={['rgba(255,255,255,0.10)', 'rgba(255,255,255,0)']}
+                    start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.45 }}
                     style={StyleSheet.absoluteFill}
                   />
+                  <LinearGradient
+                    colors={[(side === 'BUY' ? T.gain : T.loss) + '14', 'rgba(181,131,255,0.04)', 'transparent']}
+                    start={{ x: 0.05, y: 0 }} end={{ x: 0.95, y: 0.9 }}
+                    style={StyleSheet.absoluteFill}
+                  />
+                  <View style={styles.formInnerBorder} pointerEvents="none" />
 
-                  {/* BUY / SELL toggle */}
-                  <View style={styles.sideToggleWrap}>
+                                    <View style={styles.sideToggleWrap} onLayout={handleToggleLayout}>
                     <Animated.View style={[styles.sideIndicator, {
-                      width: (width - 36) / 2 - 4,
+                      width: indicatorWidth,
                       backgroundColor: side === 'BUY' ? T.gain + '22' : T.loss + '22',
                       borderColor: side === 'BUY' ? T.gain + '50' : T.loss + '50',
                     }, sideIndicatorStyle]} />
@@ -722,33 +738,56 @@ export default function Trade() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* Price input */}
-                  <View style={styles.inputGroup}>
-                    <Text style={styles.inputLabel}>Limit Price (USDT)</Text>
-                    <View style={styles.inputRow}>
-                      <TextInput
-                        style={styles.input}
-                        value={priceInput}
-                        onChangeText={setPriceInput}
-                        keyboardType="decimal-pad"
-                        placeholder="0.00"
-                        placeholderTextColor={T.textTer}
-                      />
+                                    <View style={styles.kindRow}>
+                    {(['LIMIT', 'MARKET'] as const).map((k) => (
                       <TouchableOpacity
-                        style={styles.inputSuffix}
-                        onPress={() => {
-                          if (selectedLivePrice > 0) {
-                            setPriceInput(selectedLivePrice >= 1000 ? selectedLivePrice.toFixed(2) : selectedLivePrice.toFixed(4));
-                          }
-                        }}
+                        key={k}
+                        onPress={() => setOrderKind(k)}
+                        style={[styles.kindBtn, orderKind === k && styles.kindBtnActive]}
                       >
-                        <Text style={styles.inputSuffixText}>MARKET</Text>
+                        <Text style={[styles.kindBtnText, orderKind === k && styles.kindBtnTextActive]}>{k}</Text>
                       </TouchableOpacity>
-                    </View>
+                    ))}
                   </View>
 
-                  {/* Amount input */}
-                  <View style={styles.inputGroup}>
+                                    <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>
+                      {orderKind === 'LIMIT' ? 'Limit Price (USDT)' : 'Est. Execution Price (USDT)'}
+                    </Text>
+                    {orderKind === 'LIMIT' ? (
+                      <View style={styles.inputRow}>
+                        <TextInput
+                          style={styles.input}
+                          value={priceInput}
+                          onChangeText={setPriceInput}
+                          keyboardType="decimal-pad"
+                          placeholder="0.00"
+                          placeholderTextColor={T.textTer}
+                        />
+                        <TouchableOpacity
+                          style={styles.inputSuffix}
+                          onPress={() => {
+                            if (selectedLivePrice > 0) {
+                              setPriceInput(selectedLivePrice >= 1000 ? selectedLivePrice.toFixed(2) : selectedLivePrice.toFixed(4));
+                            }
+                          }}
+                        >
+                          <Text style={styles.inputSuffixText}>LAST</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <View style={[styles.inputRow, styles.inputRowReadonly]}>
+                        <Text style={[styles.input, { color: marketRefPrice ? T.textPri : T.textTer }]}>
+                          {marketRefPrice
+                            ? `≈ $${marketRefPrice >= 1000 ? marketRefPrice.toLocaleString('en-US', { maximumFractionDigits: 2 }) : marketRefPrice.toFixed(4)}`
+                            : 'No liquidity'}
+                        </Text>
+                        <Text style={styles.inputUnit}>best {side === 'BUY' ? 'ask' : 'bid'}</Text>
+                      </View>
+                    )}
+                  </View>
+
+                                    <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>Amount ({selectedPair.base})</Text>
                     <View style={styles.inputRow}>
                       <TextInput
@@ -763,8 +802,7 @@ export default function Trade() {
                     </View>
                   </View>
 
-                  {/* Quick % buttons */}
-                  <View style={styles.pctRow}>
+                                    <View style={styles.pctRow}>
                     {quickAmountPcts.map((pct) => (
                       <TouchableOpacity key={pct} style={styles.pctBtn} onPress={() => handleQuickPct(pct)}>
                         <Text style={styles.pctBtnText}>{Math.round(pct * 100)}%</Text>
@@ -772,8 +810,7 @@ export default function Trade() {
                     ))}
                   </View>
 
-                  {/* Total */}
-                  <View style={styles.totalRow}>
+                                    <View style={styles.totalRow}>
                     <Text style={styles.totalLabel}>Total</Text>
                     <Text style={[styles.totalValue, { color: side === 'BUY' ? T.gain : T.loss }]}>
                       ≈ ${totalValue} USDT
@@ -782,15 +819,14 @@ export default function Trade() {
 
                   <View style={styles.formDivider} />
 
-                  {/* Submit button */}
-                  <Animated.View style={btnStyle}>
+                                    <Animated.View style={btnStyle}>
                     <TouchableOpacity
                       activeOpacity={0.9}
                       onPressIn={() => { btnScale.value = withSpring(0.97, { damping: 14 }); }}
                       onPressOut={() => { btnScale.value = withSpring(1, { damping: 10 }); }}
                       onPress={handlePlaceOrder}
-                      disabled={submitting}
-                      style={styles.submitBtnWrap}
+                      disabled={submitting || (orderKind === 'MARKET' && !marketRefPrice)}
+                      style={[styles.submitBtnWrap, (orderKind === 'MARKET' && !marketRefPrice) && { opacity: 0.5 }]}
                     >
                       <LinearGradient
                         colors={side === 'BUY'
@@ -806,15 +842,16 @@ export default function Trade() {
                           <Text style={styles.submitBtnText}>✓ Order Placed</Text>
                         ) : (
                           <Text style={styles.submitBtnText}>
-                            {side === 'BUY' ? '▲ Place Buy Order' : '▼ Place Sell Order'}
+                            {side === 'BUY'
+                              ? `▲ Place Buy ${orderKind === 'MARKET' ? 'Market' : 'Limit'} Order`
+                              : `▼ Place Sell ${orderKind === 'MARKET' ? 'Market' : 'Limit'} Order`}
                           </Text>
                         )}
                       </LinearGradient>
                     </TouchableOpacity>
                   </Animated.View>
 
-                  {/* Success flash */}
-                  <Animated.View style={[styles.successOverlay, successStyle]} pointerEvents="none">
+                                    <Animated.View style={[styles.successOverlay, successStyle]} pointerEvents="none">
                     <LinearGradient
                       colors={[T.gain + '22', 'transparent']}
                       style={StyleSheet.absoluteFill}
@@ -823,15 +860,20 @@ export default function Trade() {
                 </GlassPanel>
               </Animated.View>
 
-              {/* ── Order book ────────────────────────────────── */}
-              <Animated.View entering={FadeInDown.delay(160).springify().damping(18)} style={styles.obCard}>
+                            <Animated.View entering={FadeInDown.delay(160).springify().damping(16)} style={styles.obCard}>
                 <GlassPanel style={styles.obPanel}>
+                  <LinearGradient
+                    colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
+                    start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.4 }}
+                    style={StyleSheet.absoluteFill}
+                  />
+                  <View style={styles.obInnerBorder} pointerEvents="none" />
                   <View style={styles.obTitleRow}>
                     <View style={styles.sectionAccentBar} />
                     <Text style={styles.obTitle}>Order Book</Text>
                     <Text style={styles.obSubtitle}>{selectedPair.base}/USDT</Text>
                   </View>
-                  <MiniOrderBook symbol={selectedPair.symbol} currentPrice={selectedLivePrice} />
+                  <MiniOrderBook book={orderBook} loading={loadingBook} currentPrice={selectedLivePrice} />
                 </GlassPanel>
               </Animated.View>
             </View>
@@ -872,7 +914,6 @@ export default function Trade() {
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
@@ -891,7 +932,6 @@ const styles = StyleSheet.create({
   },
   statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.2 },
 
-  // Pair selector
   pairScroll: { paddingBottom: 14, gap: 7 },
   pairPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -904,8 +944,7 @@ const styles = StyleSheet.create({
   pairPillText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textTer },
   pairPillPrice: { fontSize: 11, fontFamily: FontFamily.body, marginLeft: 2 },
 
-  // Wallet strip
-  walletStrip: { marginBottom: 12 },
+  walletStrip: { marginBottom: 12, borderRadius: 18, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 } },
   walletPanel: { borderRadius: 18, borderWidth: 1, borderColor: T.glassBorder, overflow: 'hidden' },
   walletRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16 },
   walletItem: { flex: 1 },
@@ -915,19 +954,17 @@ const styles = StyleSheet.create({
   walletRefresh: { paddingHorizontal: 8, paddingVertical: 4 },
   walletRefreshIcon: { fontSize: 18, color: T.textTer },
 
-  // Tab bar
-  tabBarWrap: { marginBottom: 14 },
+  tabBarWrap: { marginBottom: 14, borderRadius: 18, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 } },
   tabBar: { borderRadius: 18, borderWidth: 1, borderColor: T.glassBorder, padding: 4 },
   tabsGroup: { flexDirection: 'row', gap: 4 },
   tabBtn: { flex: 1, paddingVertical: 10, borderRadius: 14, alignItems: 'center', overflow: 'hidden' },
   tabBtnActive: {},
   tabBtnText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textTer, letterSpacing: 0.2 },
 
-  // Form card
-  formCard: { marginBottom: 14 },
+  formCard: { marginBottom: 14, borderRadius: 24, shadowColor: T.accentDeep, shadowOpacity: 0.24, shadowRadius: 28, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
   formPanel: { borderRadius: 24, borderWidth: 1, borderColor: T.glassBorderHi, padding: 18 },
+  formInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 23, borderTopRightRadius: 23 },
 
-  // BUY/SELL toggle
   sideToggleWrap: {
     flexDirection: 'row', position: 'relative',
     backgroundColor: 'rgba(255,255,255,0.03)',
@@ -941,7 +978,15 @@ const styles = StyleSheet.create({
   sideBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', zIndex: 1 },
   sideBtnText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textTer, letterSpacing: 0.3 },
 
-  // Inputs
+  kindRow: { flexDirection: 'row', gap: 6, marginBottom: 16 },
+  kindBtn: {
+    flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: T.hairline,
+  },
+  kindBtnActive: { backgroundColor: T.accent + '1E', borderColor: T.accent + '55' },
+  kindBtnText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.textTer, letterSpacing: 0.6 },
+  kindBtnTextActive: { color: T.accent },
+
   inputGroup: { marginBottom: 14 },
   inputLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7, marginBottom: 7 },
   inputRow: {
@@ -955,6 +1000,7 @@ const styles = StyleSheet.create({
     color: T.textPri,
   },
   inputUnit: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, marginLeft: 8 },
+  inputRowReadonly: { backgroundColor: 'rgba(255,255,255,0.02)', borderStyle: 'dashed' },
   inputSuffix: {
     backgroundColor: T.accent + '20', borderRadius: 7,
     paddingHorizontal: 8, paddingVertical: 4,
@@ -962,7 +1008,6 @@ const styles = StyleSheet.create({
   },
   inputSuffixText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 0.5 },
 
-  // Quick pct
   pctRow: { flexDirection: 'row', gap: 6, marginBottom: 18 },
   pctBtn: {
     flex: 1, paddingVertical: 7, borderRadius: 9,
@@ -971,7 +1016,6 @@ const styles = StyleSheet.create({
   },
   pctBtnText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.textSec },
 
-  // Total
   totalRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     marginBottom: 16,
@@ -981,15 +1025,14 @@ const styles = StyleSheet.create({
 
   formDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 16 },
 
-  // Submit
   submitBtnWrap: { borderRadius: 16, overflow: 'hidden' },
   submitBtn: { paddingVertical: 15, alignItems: 'center', borderRadius: 16 },
   submitBtnText: { fontSize: 15, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 0.3 },
   successOverlay: { ...StyleSheet.absoluteFillObject, borderRadius: 24 },
 
-  // Order book
-  obCard: { marginBottom: 14 },
-  obPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, padding: 16 },
+  obCard: { marginBottom: 14, borderRadius: 20, shadowColor: T.violet, shadowOpacity: 0.14, shadowRadius: 22, shadowOffset: { width: 0, height: 10 } },
+  obPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorderHi, padding: 16 },
+  obInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 19, borderTopRightRadius: 19 },
   obTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
   obTitle: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
@@ -1012,8 +1055,13 @@ const styles = StyleSheet.create({
   },
   obSpreadLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer },
   obSpreadValue: { fontSize: 12, fontFamily: FontFamily.heading },
+  obLoadingState: { paddingVertical: 28, alignItems: 'center', gap: 10 },
+  obLoadingText: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer },
+  obEmptyState: { paddingVertical: 32, alignItems: 'center', gap: 6 },
+  obEmptyIcon: { fontSize: 24, color: T.textTer },
+  obEmptyText: { fontSize: 12.5, fontFamily: FontFamily.heading, color: T.textSec },
+  obEmptySubText: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer },
 
-  // My Orders
   ordersHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   ordersTitle: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, flex: 1 },
   refreshBtn: {
@@ -1033,8 +1081,13 @@ const styles = StyleSheet.create({
   orderSideText: { fontSize: 10, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
   orderAsset: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
   orderMeta: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
+  orderTypeBadge: {
+    backgroundColor: T.accent + '18', borderRadius: 5,
+    paddingHorizontal: 6, paddingVertical: 1.5,
+  },
+  orderTypeBadgeText: { fontSize: 8, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 0.4 },
   statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginBottom: 3 },
-  statusTextt: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
+  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
   orderTime: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer },
   cancelBtn: {
     marginLeft: 10, width: 26, height: 26, borderRadius: 13,
@@ -1043,7 +1096,6 @@ const styles = StyleSheet.create({
   },
   cancelBtnText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.loss },
 
-  // States
   loadingState: { paddingVertical: 40, alignItems: 'center', gap: 12 },
   loadingText: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
   emptyState: { paddingVertical: 60, alignItems: 'center', gap: 8 },

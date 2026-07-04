@@ -17,35 +17,28 @@ import { useRouter, type Router } from 'expo-router';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useTicker24h } from '../../hooks/useTicker24h';
-// Note: no `useMarketSocket()` call here. The websocket connection is
-// established exactly once at the tab-layout level (app/(tabs)/_layout.tsx)
-// and shared via the store — every screen just reads from it. Calling the
-// hook again here would open a second, redundant connection the first time
-// this tab is visited (the hook's internal ref-guard only protects against
-// double-invocation within a single component instance, not across
-// multiple components that each independently call the hook).
 
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
 
 const T = {
   bg0: '#06070A',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
 const SYMBOL_META: Record<string, { name: string; short: string; color: string }> = {
@@ -90,7 +83,6 @@ const SYMBOL_META: Record<string, { name: string; short: string; color: string }
   ARBUSDT:   { name: 'Arbitrum',         short: 'ARB',  color: '#6FB6F2' },
 };
 
-// Module-level constant — computed once at import time, not per render.
 const ALL_SYMBOLS = Object.keys(SYMBOL_META);
 
 type TabType = 'hot' | 'gainers' | 'losers';
@@ -101,95 +93,96 @@ const TABS: { key: TabType; label: string }[] = [
   { key: 'losers', label: 'Losers' },
 ];
 
-const ROW_HEIGHT = 73;
+const ROW_HEIGHT = 74;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
-  ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.13 },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
-  screenTitle: { fontSize: 23, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.3 },
-  screenSubtitle: { fontSize: 11.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 3 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, paddingVertical: 6, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.03)' },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.2 },
-  searchRow: { marginBottom: 14 },
-  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 15, paddingHorizontal: 14, paddingVertical: 13, borderWidth: 1, borderColor: T.glassBorder },
-  searchWrapFocused: { borderColor: 'rgba(124,138,255,0.5)' },
+  ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.15 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  screenTitle: { fontSize: 24, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.4 },
+  screenSubtitle: { fontSize: 11.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 4 },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.035)' },
+  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
+  searchRow: { marginBottom: 16, borderRadius: 17, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, paddingHorizontal: 15, paddingVertical: 14, borderWidth: 1, borderColor: T.glassBorder },
+  searchWrapFocused: { borderColor: 'rgba(124,138,255,0.55)' },
   searchIcon: { fontSize: 17, color: T.textTer },
   searchInput: { flex: 1, fontSize: 14, fontFamily: FontFamily.body, color: T.textPri },
   searchClear: { fontSize: 11, color: T.textTer, padding: 4 },
-  tabsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
-  tabsGroup: { flexDirection: 'row', gap: 4, backgroundColor: T.glass, borderRadius: 14, padding: 4, borderWidth: 1, borderColor: T.hairline },
-  tab: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, overflow: 'hidden' },
-  tabActive: {},
+  tabsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 18 },
+  tabsGroup: { flexDirection: 'row', gap: 4, backgroundColor: T.glass, borderRadius: 15, padding: 4, borderWidth: 1, borderColor: T.hairline },
+  tab: { paddingHorizontal: 17, paddingVertical: 9, borderRadius: 11, overflow: 'hidden' },
+  tabActive: { shadowColor: T.accentDeep, shadowOpacity: 0.45, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   tabText: { fontSize: 12, fontFamily: FontFamily.bodyMedium, color: T.textTer },
   tabTextActive: { color: '#fff' },
-  countPill: { marginLeft: 'auto', backgroundColor: 'rgba(124,138,255,0.10)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: 'rgba(124,138,255,0.2)' },
+  countPill: { marginLeft: 'auto', backgroundColor: 'rgba(124,138,255,0.12)', borderRadius: 9, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(124,138,255,0.22)' },
   countText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.accent },
-  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
-  sectionLabelText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2 },
-  sectionCountPill: { backgroundColor: 'rgba(124,138,255,0.12)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 11 },
+  sectionAccentBar: { width: 3, height: 14, borderRadius: 2, backgroundColor: T.accent },
+  sectionLabelText: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2 },
+  sectionCountPill: { backgroundColor: 'rgba(124,138,255,0.14)', borderRadius: 7, paddingHorizontal: 7, paddingVertical: 2.5 },
   sectionCountText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent },
-  listHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginBottom: 9 },
-  listHeaderText: { fontSize: 9, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.7 },
-  assetRow: { flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: T.glass, borderRadius: 17, paddingVertical: 13, paddingHorizontal: 13, borderWidth: 1, borderColor: T.glassBorder, overflow: 'hidden' },
-  dotAccent: { width: 2.5, height: 30, borderRadius: 2 },
-  assetIconBg: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
+  listHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginBottom: 10 },
+  listHeaderText: { fontSize: 9, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.8 },
+  assetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: T.glass, borderRadius: 18, paddingVertical: 14, paddingHorizontal: 14, borderWidth: 1, borderColor: T.glassBorder, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  dotAccent: { width: 3, height: 32, borderRadius: 2 },
+  assetIconBg: { width: 42, height: 42, borderRadius: 13, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   assetIconText: { fontSize: 12, fontFamily: FontFamily.heading },
   assetInfo: { flex: 1 },
-  assetSymbol: { fontSize: 14, fontFamily: FontFamily.heading, color: T.textPri },
-  assetName: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
+  assetSymbol: { fontSize: 14.5, fontFamily: FontFamily.heading, color: T.textPri },
+  assetName: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2.5 },
   sparklinePlaceholder: { width: 58, height: 34 },
-  assetPriceCol: { alignItems: 'flex-end', gap: 5 },
+  assetPriceCol: { alignItems: 'flex-end', gap: 6 },
   assetPrice: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri },
-  changeBadge: { paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 6 },
+  changeBadge: { paddingHorizontal: 7.5, paddingVertical: 3, borderRadius: 7 },
   changeText: { fontSize: 10, fontFamily: FontFamily.heading, letterSpacing: 0.2 },
   emptyState: { paddingVertical: 60, alignItems: 'center', gap: 12 },
   emptyIcon: { fontSize: 32, color: T.textTer },
   emptyText: { fontSize: 13, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
 });
 
-
-// memo: AmbientField takes no props at all, so it should never re-render
-// due to Market's state changes (search typing, tab switches, price ticks)
-// — only its own internal shared-value drift animation should ever run.
 const AmbientField = memo(function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
     drift.value = withRepeat(
-      withTiming(1, { duration: 13000, easing: Easing.inOut(Easing.sin) }),
+      withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }),
       -1, true
     );
   }, []);
   const orb1 = useAnimatedStyle(() => ({
     transform: [
-      { translateX: interpolate(drift.value, [0, 1], [-10, 14]) },
-      { translateY: interpolate(drift.value, [0, 1], [-8, 10]) },
+      { translateX: interpolate(drift.value, [0, 1], [-12, 16]) },
+      { translateY: interpolate(drift.value, [0, 1], [-10, 12]) },
     ],
   }));
   const orb2 = useAnimatedStyle(() => ({
     transform: [
-      { translateX: interpolate(drift.value, [0, 1], [12, -14]) },
-      { translateY: interpolate(drift.value, [0, 1], [6, -10]) },
+      { translateX: interpolate(drift.value, [0, 1], [14, -16]) },
+      { translateY: interpolate(drift.value, [0, 1], [8, -12]) },
+    ],
+  }));
+  const orb3 = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: interpolate(drift.value, [0, 1], [-8, 10]) },
+      { translateY: interpolate(drift.value, [0, 1], [10, -8]) },
     ],
   }));
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Animated.View style={[styles.ambientOrb, { top: -80, right: -60, backgroundColor: T.violet }, orb1]} />
-      <Animated.View style={[styles.ambientOrb, { bottom: 160, left: -90, backgroundColor: T.accentDeep, opacity: 0.10 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: -90, right: -70, backgroundColor: T.violet }, orb1]} />
+      <Animated.View style={[styles.ambientOrb, { bottom: 180, left: -100, backgroundColor: T.accentDeep, opacity: 0.09 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: 460, right: -90, width: 220, height: 220, borderRadius: 110, backgroundColor: T.gold, opacity: 0.05 }, orb3]} />
     </View>
   );
 });
 
-// memo: purely presentational; without memo it would re-render (and
-// re-touch its native BlurView) every time its parent re-renders.
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -197,8 +190,6 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
-// memo: depends only on `color`; animation is fully self-contained via
-// shared values.
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
@@ -210,32 +201,26 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
       <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ringStyle]} />
-      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }} />
+      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color, shadowColor: color, shadowOpacity: 0.9, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }} />
     </View>
   );
 });
 
-// memo + custom comparator: only re-renders when this row's own price or
-// side actually changes (used inside AssetRow, which itself now owns its
-// own price subscription — see below).
 const PriceFlash = memo(function PriceFlash({ price, positive }: { price: string; positive: boolean }) {
   const flash = useSharedValue(0);
   const flashStyle = useAnimatedStyle(() => ({
-    backgroundColor: `rgba(${positive ? '61,220,151' : '255,107,122'}, ${flash.value * 0.18})`,
+    backgroundColor: `rgba(${positive ? '61,220,151' : '255,107,122'}, ${flash.value * 0.2})`,
   }));
   useEffect(() => {
     flash.value = withSequence(withTiming(1, { duration: 100 }), withTiming(0, { duration: 700 }));
   }, [price]);
   return (
-    <Animated.View style={[{ borderRadius: 5, paddingHorizontal: 3, paddingVertical: 1 }, flashStyle]}>
+    <Animated.View style={[{ borderRadius: 6, paddingHorizontal: 4, paddingVertical: 1.5 }, flashStyle]}>
       <Text style={styles.assetPrice}>${price}</Text>
     </Animated.View>
   );
 }, (p, n) => p.price === n.price && p.positive === n.positive);
 
-// memo + useMemo: segment geometry (trig per point) is the expensive part;
-// useMemo means it's only recalculated when `points` itself changes (i.e.
-// once per sparkline update from ticker24h), not on every parent re-render.
 const Sparkline = memo(function Sparkline({ points, positive }: { points: number[]; positive: boolean }) {
   const segments = useMemo(() => {
     if (points.length < 2) return null;
@@ -251,7 +236,7 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       const y2 = h - ((points[i + 1] - min) / range) * h;
       const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
       const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
-      return { x1, y1, length, angle, opacity: 0.35 + (i / points.length) * 0.65 };
+      return { x1, y1, length, angle, opacity: 0.4 + (i / points.length) * 0.6 };
     });
   }, [points]);
   if (!segments) return <View style={styles.sparklinePlaceholder} />;
@@ -261,8 +246,8 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       {segments.map((s, i) => (
         <View key={i} style={{
           position: 'absolute', left: s.x1, top: s.y1,
-          width: s.length, height: 1.75,
-          backgroundColor: color, borderRadius: 1,
+          width: s.length, height: 2,
+          backgroundColor: color, borderRadius: 2,
           opacity: s.opacity,
           transform: [{ rotate: `${s.angle}deg` }],
           transformOrigin: '0 0',
@@ -272,18 +257,6 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
   );
 }, (p, n) => p.points === n.points && p.positive === n.positive);
 
-// ── AssetRow ──────────────────────────────────────────────────────────────
-// Biggest structural change in this file: AssetRow now subscribes to its
-// OWN price directly from the store (`s.prices[symbol]`), instead of
-// receiving a pre-merged `asset` object built by Market on every tick.
-//
-// Why this matters: previously Market selected the whole `prices` map,
-// which forced Market itself to re-render on every websocket tick for
-// every symbol (not just the ones whose rows were visible or changed).
-// With each row subscribing narrowly to its own slice, Market no longer
-// needs `prices` at all — a price tick for BTC now only re-renders BTC's
-// row, and Market's own render function isn't invoked by price ticks at
-// all, only by tab/search changes and periodic ticker24h updates.
 function AssetRowBase({ symbol, change24h, sparkline, index, router }: {
   symbol: string; change24h: number; sparkline: number[]; index: number; router: Router;
 }) {
@@ -294,36 +267,26 @@ function AssetRowBase({ symbol, change24h, sparkline, index, router }: {
     transform: [{ scale: interpolate(lift.value, [0, 1], [1, 0.985]) }],
   }));
   const borderStyle = useAnimatedStyle(() => ({
-    borderColor: lift.value > 0 ? 'rgba(124,138,255,0.35)' : T.glassBorder,
+    borderColor: lift.value > 0 ? 'rgba(124,138,255,0.4)' : T.glassBorder,
   }));
 
-  // This component re-renders on every price tick (it subscribes to its own
-  // price directly). `meta` only depends on `symbol` (which never changes
-  // for a mounted row), so memoizing it means the lookup + fallback object
-  // construction happens once per row instead of on every tick.
   const meta = useMemo(
     () => SYMBOL_META[symbol] ?? { name: symbol, short: symbol.replace('USDT', ''), color: T.accent },
     [symbol]
   );
   const positive = change24h >= 0;
 
-  // All of these style objects/arrays previously were inline literals,
-  // meaning React allocated a fresh object for EACH of them on EVERY price
-  // tick — even though none of them actually depend on price, only on
-  // `positive` (derived from change24h) or `meta` (derived from symbol).
-  // Memoizing them means a price-only re-render does zero extra allocation
-  // for styling, across all ~40 rows, on every tick.
-const gradientColors = useMemo<[string, string]>(
-  () => [positive ? T.gain + '07' : T.loss + '07', 'transparent'],
-  [positive]
-);
+  const gradientColors = useMemo<[string, string]>(
+    () => [positive ? T.gain + '09' : T.loss + '09', 'transparent'],
+    [positive]
+  );
 
   const dotStyle = useMemo(
     () => [styles.dotAccent, { backgroundColor: positive ? T.gain : T.loss }],
     [positive]
   );
   const iconBgStyle = useMemo(
-    () => [styles.assetIconBg, { backgroundColor: meta.color + '14', borderColor: meta.color + '2A' }],
+    () => [styles.assetIconBg, { backgroundColor: meta.color + '16', borderColor: meta.color + '30' }],
     [meta]
   );
   const iconTextStyle = useMemo(
@@ -344,16 +307,12 @@ const gradientColors = useMemo<[string, string]>(
     : price >= 1 ? price.toFixed(4)
     : price.toFixed(6);
 
-  // Stable per-row navigation handler: recreated only if `router` or
-  // `symbol` change (i.e. essentially never, for a given row's lifetime),
-  // instead of a brand-new closure being allocated every time FlatList
-  // calls renderItem for this row (e.g. during scroll recycling).
   const handlePress = useCallback(() => {
     router.push({ pathname: '/(tabs)/cryptoGraph', params: { symbol } });
   }, [router, symbol]);
 
   return (
-    <Animated.View entering={FadeInDown.delay(Math.min(index, 12) * 22).springify().damping(20)} style={{ marginBottom: 8 }}>
+    <Animated.View entering={FadeInDown.delay(Math.min(index, 12) * 22).springify().damping(20)} style={{ marginBottom: 9 }}>
       <TouchableOpacity
         activeOpacity={1}
         onPress={handlePress}
@@ -389,12 +348,6 @@ const gradientColors = useMemo<[string, string]>(
   );
 }
 
-// memo with a custom comparator: since AssetRow now sources its own price
-// via a store selector, the parent-passed props that matter are just
-// symbol/change24h/sparkline/index. `router` is intentionally excluded from
-// the comparison — expo-router's router object is stable across renders,
-// and the row's own internal `handlePress` useCallback already guards
-// against it causing pointless re-binding.
 function assetPropsEqual(p: any, n: any) {
   return (
     p.symbol === n.symbol &&
@@ -420,13 +373,6 @@ const TabButton = memo(function TabButton({ label, active, onPress }: { label: s
   );
 });
 
-// ── Extracted, memoized header sections ────────────────────────────────
-// Splitting the header into small memoized pieces (instead of one large
-// useMemo-built JSX blob) means each piece only re-renders when ITS OWN
-// props actually change — e.g. `connected` toggling no longer forces the
-// search input or tabs to re-render, and typing in search no longer forces
-// the status pill to re-render.
-
 const TopBar = memo(function TopBar({ connected }: { connected: boolean }) {
   return (
     <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
@@ -434,7 +380,7 @@ const TopBar = memo(function TopBar({ connected }: { connected: boolean }) {
         <Text style={styles.screenTitle}>Markets</Text>
         <Text style={styles.screenSubtitle}>{ALL_SYMBOLS.length} assets · real-time</Text>
       </View>
-      <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.3)' : 'rgba(255,107,122,0.3)' }]}>
+      <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.32)' : 'rgba(255,107,122,0.32)' }]}>
         <PulseDot color={connected ? T.gain : T.loss} />
         <Text style={[styles.statusText, { color: connected ? T.gain : T.loss }]}>
           {connected ? 'LIVE' : 'OFFLINE'}
@@ -452,7 +398,7 @@ const SearchBar = memo(function SearchBar({
 }) {
   return (
     <Animated.View entering={FadeInDown.delay(80).springify().damping(16)} style={styles.searchRow}>
-      <GlassPanel style={[styles.searchWrap, focused && styles.searchWrapFocused]} intensity={20}>
+      <GlassPanel style={[styles.searchWrap, focused && styles.searchWrapFocused]} intensity={22}>
         <Text style={styles.searchIcon}>⌕</Text>
         <TextInput
           style={styles.searchInput}
@@ -511,9 +457,6 @@ const SectionLabelRow = memo(function SectionLabelRow({ activeTab, count }: { ac
   );
 });
 
-// Fully static — there is nothing dynamic about the column labels, so this
-// is built exactly once at module load instead of being rebuilt inside any
-// component or useMemo call.
 const LIST_COLUMN_HEADER = (
   <View style={styles.listHeader}>
     <Text style={styles.listHeaderText}>Asset</Text>
@@ -526,23 +469,9 @@ export default function Market() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  // Only `ticker24h` (24h change + sparkline) and `connected` are selected
-  // here — deliberately NOT `prices`. `prices` changes on every websocket
-  // tick for every symbol; selecting it here would force this whole screen
-  // to re-render on every tick regardless of which row actually changed.
-  // Each AssetRow instead subscribes to its own price slice directly (see
-  // AssetRowBase above), so Market's own re-renders are now driven only by
-  // ticker24h updates (periodic, not per-tick), connection status changes,
-  // and user interaction (search/tab).
   const ticker24h = useMarketStore((s) => s.ticker24h);
   const connected = useMarketStore((s) => s.connected);
 
-  // Derived boolean selector instead of reading the raw `prices` object.
-  // Zustand bails out of re-rendering when a selector's *output* is
-  // reference/value-equal to the previous one (`Object.is` comparison) —
-  // so even though the underlying `prices` map changes every tick, this
-  // boolean only flips once (false → true, the first time any price
-  // arrives) and never causes a re-render again after that.
   const hasPrices = useMarketStore((s) => Object.keys(s.prices).length > 0);
 
   const [activeTab, setActiveTab] = useState<TabType>('hot');
@@ -551,12 +480,6 @@ export default function Market() {
 
   useTicker24h();
 
-  // Ordering/filtering now depends ONLY on ticker24h/activeTab/search —
-  // never on price. Previously this list was rebuilt (and, for Gainers/
-  // Losers, fully re-sorted with O(n log n)) on every single price tick,
-  // even though the sort key (`change24h`) comes from ticker24h and never
-  // actually changes on a raw price tick. Now the expensive sort only runs
-  // when the data it depends on actually changes.
   const filtered = useMemo(() => {
     let symbols = ALL_SYMBOLS;
     if (search.trim()) {
@@ -619,19 +542,11 @@ export default function Market() {
     </Animated.View>
   ), [hasPrices]);
 
-  // Previously a fresh array + object literal on every Market render. Market
-  // now re-renders far less often than before (only for ticker/tab/search/
-  // connection changes, not per price tick), so this is low-frequency, but
-  // it's on the FlatList itself — the component where prop churn matters
-  // most for scroll/navigation smoothness — so it's worth keeping stable.
   const contentContainerStyle = useMemo(
     () => [styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 120 }],
     [insets.top]
   );
 
-  // Same reasoning: a stable function reference instead of a new arrow
-  // function on every render, for the prop FlatList consults on every
-  // scroll/layout pass.
   const getItemLayout = useCallback(
     (_: unknown, index: number) => ({ length: ROW_HEIGHT, offset: ROW_HEIGHT * index, index }),
     []

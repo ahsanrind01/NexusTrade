@@ -1,18 +1,19 @@
 import { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Dimensions, TextInput, KeyboardAvoidingView, Platform,
+  TextInput, KeyboardAvoidingView, Platform,
   Modal, Pressable, Alert,
 } from 'react-native';
 import Animated, {
   FadeIn, FadeInDown, FadeInUp, FadeOut,
   useSharedValue, useAnimatedStyle,
-  withSpring, withTiming, withSequence, withRepeat,
-  interpolate, Easing,
+  withSpring, withTiming, Easing,
+  interpolate,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
 import {
   useProfile, useUpdateProfile, useChangePassword,
@@ -22,43 +23,34 @@ import {
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
 
-const { width } = Dimensions.get('window');
-
-// ─────────────────────────────────────────────────────────────
-// THEME — mirrored 1:1 from the dashboard so this screen feels
-// like the same app, not a bolted-on page.
-// ─────────────────────────────────────────────────────────────
 const T = {
   bg0: '#06070A',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
 type Provider = 'LOCAL' | 'GOOGLE';
 
-// ─────────────────────────────────────────────────────────────
-// SHARED PRIMITIVES (same contract as dashboard's)
-// ─────────────────────────────────────────────────────────────
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -66,49 +58,33 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
-const PulseDot = memo(function PulseDot({ color }: { color: string }) {
-  const scale = useSharedValue(1);
-  const opacity = useSharedValue(0.9);
-  useEffect(() => {
-    scale.value = withRepeat(withSequence(withTiming(2.2, { duration: 1100 }), withTiming(1, { duration: 0 })), -1, false);
-    opacity.value = withRepeat(withSequence(withTiming(0, { duration: 1100 }), withTiming(0.9, { duration: 0 })), -1, false);
-  }, []);
-  const ringStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }], opacity: opacity.value }));
-  return (
-    <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
-      <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ringStyle]} />
-      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }} />
-    </View>
-  );
-});
-
 function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
-    drift.value = withRepeat(withTiming(1, { duration: 12000, easing: Easing.inOut(Easing.sin) }), -1, true);
+    drift.value = withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) });
   }, []);
   const orb1 = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 14]) }, { translateY: interpolate(drift.value, [0, 1], [-8, 10]) }],
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 16]) }, { translateY: interpolate(drift.value, [0, 1], [-10, 12]) }],
   }));
   const orb2 = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(drift.value, [0, 1], [10, -16]) }, { translateY: interpolate(drift.value, [0, 1], [6, -12]) }],
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [12, -18]) }, { translateY: interpolate(drift.value, [0, 1], [8, -14]) }],
   }));
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Animated.View style={[styles.ambientOrb, { top: -80, left: -60, backgroundColor: T.accentDeep }, orb1]} />
-      <Animated.View style={[styles.ambientOrb, { top: 220, right: -100, backgroundColor: T.violet, opacity: 0.10 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: -90, left: -70, backgroundColor: T.accentDeep }, orb1]} />
+      <Animated.View style={[styles.ambientOrb, { top: 220, right: -110, backgroundColor: T.violet, opacity: 0.09 }, orb2]} />
     </View>
   );
 }
 
-// Press-scale wrapper, same feel as ActionButton on the dashboard.
-const Pressy = memo(function Pressy({ onPress, children, style }: any) {
+const Pressy = memo(function Pressy({ onPress, children, style, disabled }: any) {
   const press = useSharedValue(0);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.97]) }] }));
   return (
-    <Animated.View style={[animStyle, style]}>
+    <Animated.View style={[animStyle, style, disabled && { opacity: 0.45 }]}>
       <TouchableOpacity
         activeOpacity={1}
+        disabled={disabled}
         onPress={onPress}
         onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
         onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
@@ -119,49 +95,36 @@ const Pressy = memo(function Pressy({ onPress, children, style }: any) {
   );
 });
 
-// ─────────────────────────────────────────────────────────────
-// AVATAR — gradient ring, initials fallback, edit badge
-// ─────────────────────────────────────────────────────────────
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/);
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-const Avatar = memo(function Avatar({ name, onEdit }: { name: string; onEdit: () => void }) {
-  const shimmer = useSharedValue(0);
-  useEffect(() => {
-    shimmer.value = withRepeat(withTiming(1, { duration: 2600, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, []);
-  const ringStyle = useAnimatedStyle(() => ({ opacity: interpolate(shimmer.value, [0, 1], [0.6, 1]) }));
-
+const Avatar = memo(function Avatar({ name, onPress }: { name: string; onPress: () => void }) {
   return (
-    <View style={styles.avatarWrap}>
-      <Animated.View style={[styles.avatarRing, ringStyle]}>
-        <LinearGradient
-          colors={[T.violet, T.accent, T.accentDeep]}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={styles.avatarRingGradient}
-        />
-      </Animated.View>
-      <View style={styles.avatarInner}>
-        <Text style={styles.avatarInitials}>{getInitials(name || 'Trader')}</Text>
+    <Pressy onPress={onPress} style={styles.avatarWrap}>
+      <View style={styles.avatarBox}>
+        <View style={styles.avatarRing}>
+          <LinearGradient
+            colors={[T.violet, T.accent, T.accentDeep]}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={styles.avatarRingGradient}
+          />
+        </View>
+        <View style={styles.avatarInner}>
+          <Text style={styles.avatarInitials}>{getInitials(name || 'Trader')}</Text>
+        </View>
       </View>
-      <Pressy onPress={onEdit} style={styles.avatarEditBtn}>
-        <LinearGradient colors={[T.accentDeep, T.violet]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
-        <Text style={styles.avatarEditIcon}>✎</Text>
-      </Pressy>
-    </View>
+    </Pressy>
   );
 });
 
-// ─────────────────────────────────────────────────────────────
-// BADGES
-// ─────────────────────────────────────────────────────────────
 function ProviderBadge({ provider }: { provider: Provider }) {
   const isGoogle = provider === 'GOOGLE';
   return (
-    <View style={[styles.badge, { backgroundColor: isGoogle ? 'rgba(124,138,255,0.10)' : 'rgba(232,182,86,0.10)', borderColor: isGoogle ? 'rgba(124,138,255,0.22)' : 'rgba(232,182,86,0.22)' }]}>
+    <View style={[styles.badge, { borderColor: isGoogle ? 'rgba(124,138,255,0.28)' : 'rgba(232,182,86,0.28)' }]}>
+      <Ionicons name={isGoogle ? 'logo-google' : 'mail-outline'} size={12} color={isGoogle ? T.accent : T.gold} />
       <Text style={[styles.badgeText, { color: isGoogle ? T.accent : T.gold }]}>
         {isGoogle ? 'Google Account' : 'Email & Password'}
       </Text>
@@ -171,54 +134,24 @@ function ProviderBadge({ provider }: { provider: Provider }) {
 
 function VerifiedBadge({ verified }: { verified: boolean }) {
   return (
-    <View style={[styles.badge, { backgroundColor: verified ? T.gainDim : 'rgba(255,255,255,0.04)', borderColor: verified ? 'rgba(61,220,151,0.22)' : T.hairline }]}>
-      <PulseDot color={verified ? T.gain : T.textTer} />
-      <Text style={[styles.badgeText, { color: verified ? T.gain : T.textTer, marginLeft: 5 }]}>
+    <View style={[styles.badge, { borderColor: verified ? 'rgba(61,220,151,0.28)' : T.hairline }]}>
+      <Ionicons name={verified ? 'checkmark-circle' : 'ellipse-outline'} size={12} color={verified ? T.gain : T.textTer} />
+      <Text style={[styles.badgeText, { color: verified ? T.gain : T.textTer }]}>
         {verified ? 'Phone Verified' : 'Phone Unverified'}
       </Text>
     </View>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// QUICK ACTIONS ROW
-// ─────────────────────────────────────────────────────────────
-const ActionButton = memo(function ActionButton({ label, icon, color, onPress }: { label: string; icon: string; color: string; onPress: () => void }) {
-  const press = useSharedValue(0);
-  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.9]) }] }));
-  const glowStyle = useAnimatedStyle(() => ({ opacity: interpolate(press.value, [0, 1], [0, 1]) }));
+function InfoRow({ icon, label, value, valueColor, isLast }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; valueColor?: string; isLast?: boolean }) {
   return (
-    <Animated.View style={[{ flex: 1, alignItems: 'center' }, animStyle]}>
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={onPress}
-        onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
-        onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
-        style={{ alignItems: 'center' }}
-      >
-        <View style={styles.actionIconShell}>
-          <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 16, backgroundColor: color, opacity: 0.25 }, glowStyle]} />
-          <Text style={[styles.actionIcon, { color }]}>{icon}</Text>
-        </View>
-        <Text style={styles.actionLabel}>{label}</Text>
-      </TouchableOpacity>
-    </Animated.View>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────
-// INFO ROW — used inside Personal Info / Security panels
-// ─────────────────────────────────────────────────────────────
-function InfoRow({ label, value, onPress, valueColor, isLast }: { label: string; value: string; onPress?: () => void; valueColor?: string; isLast?: boolean }) {
-  const Wrapper: any = onPress ? TouchableOpacity : View;
-  return (
-    <Wrapper activeOpacity={0.7} onPress={onPress} style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <View style={styles.infoRightGroup}>
-        <Text style={[styles.infoValue, valueColor ? { color: valueColor } : {}]} numberOfLines={1}>{value}</Text>
-        {onPress && <Text style={styles.infoChevron}>›</Text>}
+    <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
+      <View style={styles.infoLeft}>
+        <Ionicons name={icon} size={15} color={T.textTer} />
+        <Text style={styles.infoLabel}>{label}</Text>
       </View>
-    </Wrapper>
+      <Text style={[styles.infoValue, valueColor ? { color: valueColor } : {}]} numberOfLines={1}>{value}</Text>
+    </View>
   );
 }
 
@@ -231,9 +164,6 @@ function SectionLabel({ text }: { text: string }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// BOTTOM SHEET MODAL SHELL — glass, slide-up, blurred backdrop
-// ─────────────────────────────────────────────────────────────
 function SheetModal({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
   const insets = useSafeAreaInsets();
   return (
@@ -256,7 +186,7 @@ function SheetModal({ visible, onClose, title, children }: { visible: boolean; o
             <View style={styles.sheetHeaderRow}>
               <Text style={styles.sheetTitle}>{title}</Text>
               <TouchableOpacity onPress={onClose} style={styles.sheetCloseBtn}>
-                <Text style={styles.sheetCloseIcon}>✕</Text>
+                <Ionicons name="close" size={16} color={T.textSec} />
               </TouchableOpacity>
             </View>
             {children}
@@ -289,8 +219,8 @@ function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType,
 
 function SheetPrimaryButton({ label, onPress, loading }: { label: string; onPress: () => void; loading?: boolean }) {
   return (
-    <Pressy onPress={loading ? undefined : onPress} style={{ marginTop: 6 }}>
-      <View style={[styles.sheetPrimaryBtn, loading && { opacity: 0.7 }]}>
+    <Pressy onPress={loading ? undefined : onPress} style={{ marginTop: 6 }} disabled={loading}>
+      <View style={styles.sheetPrimaryBtn}>
         <LinearGradient colors={[T.accentDeep, T.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />
         <Text style={styles.sheetPrimaryBtnText}>{loading ? 'Please wait…' : label}</Text>
       </View>
@@ -298,9 +228,21 @@ function SheetPrimaryButton({ label, onPress, loading }: { label: string; onPres
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// MAIN SCREEN
-// ─────────────────────────────────────────────────────────────
+function SettingsMenuRow({ icon, label, sublabel, onPress, disabled }: { icon: keyof typeof Ionicons.glyphMap; label: string; sublabel?: string; onPress: () => void; disabled?: boolean }) {
+  return (
+    <TouchableOpacity activeOpacity={disabled ? 1 : 0.65} onPress={disabled ? undefined : onPress} style={[styles.menuRow, disabled && { opacity: 0.4 }]}>
+      <View style={styles.menuIconShell}>
+        <Ionicons name={icon} size={17} color={T.accent} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.menuLabel}>{label}</Text>
+        {sublabel ? <Text style={styles.menuSublabel}>{sublabel}</Text> : null}
+      </View>
+      {!disabled && <Ionicons name="chevron-forward" size={16} color={T.textTer} />}
+    </TouchableOpacity>
+  );
+}
+
 export default function Profile() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -312,19 +254,17 @@ export default function Profile() {
   const verifyOtpMutation = useVerifyPhoneOtp();
   const logoutMutation = useLogout();
 
-  // Normalized view of the profile with safe fallbacks while the
-  // GET /auth/profile request is in flight (falls back to what
-  // login/signup already put in authStore).
   const profile = useMemo(() => ({
     id: user?.id ?? '',
     name: user?.name ?? 'Trader',
     email: user?.email ?? '',
     provider: (user?.provider ?? 'LOCAL') as Provider,
-    profileImage: user?.profileImage ?? null,
     phoneNumber: user?.phoneNumber ?? null,
     phoneVerified: user?.phoneVerified ?? false,
     createdAt: user?.createdAt ?? new Date().toISOString(),
   }), [user]);
+
+  const [settingsVisible, setSettingsVisible] = useState(false);
 
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState(profile.name);
@@ -339,17 +279,32 @@ export default function Profile() {
   const [phoneStep, setPhoneStep] = useState<'enter' | 'otp'>('enter');
   const [phoneInput, setPhoneInput] = useState(profile.phoneNumber ?? '');
   const [otpInput, setOtpInput] = useState('');
+  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
 
   const memberSince = useMemo(() => {
     const d = new Date(profile.createdAt);
     return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
   }, [profile.createdAt]);
 
+  const openFromMenu = useCallback((open: () => void) => {
+    setSettingsVisible(false);
+    setTimeout(open, 280);
+  }, []);
+
   const openEdit = useCallback(() => {
     setEditName(profile.name);
     setEditEmail(profile.email);
     setEditVisible(true);
   }, [profile.name, profile.email]);
+
+  const openPassword = useCallback(() => setPwdVisible(true), []);
+
+  const openPhone = useCallback(() => {
+    setPhoneInput(profile.phoneNumber ?? '');
+    setPhoneStep('enter');
+    setDevOtpHint(null);
+    setPhoneVisible(true);
+  }, [profile.phoneNumber]);
 
   const handleSaveProfile = useCallback(() => {
     if (!editName.trim() || !editEmail.trim()) {
@@ -384,10 +339,18 @@ export default function Profile() {
   }, [currentPwd, newPwd, confirmPwd, changePasswordMutation]);
 
   const handleSendOtp = useCallback(() => {
-    if (!phoneInput.trim()) return Alert.alert('Missing Field', 'Enter a phone number first.');
-    sendOtpMutation.mutate(phoneInput.trim(), {
-      onSuccess: () => setPhoneStep('otp'),
-      onError: (err: any) => Alert.alert('Failed to Send OTP', err.response?.data?.error || 'Something went wrong'),
+    const cleaned = phoneInput.trim();
+    if (!cleaned) return Alert.alert('Missing Field', 'Enter a phone number first.');
+    if (!cleaned.startsWith('+')) {
+      return Alert.alert('Include Country Code', 'Enter your number with a country code, e.g. +923001234567.');
+    }
+    setDevOtpHint(null);
+    sendOtpMutation.mutate(cleaned, {
+      onSuccess: (data: any) => {
+        setPhoneStep('otp');
+        if (data?.otp) setDevOtpHint(String(data.otp));
+      },
+      onError: (err: any) => Alert.alert('Failed to Send Code', err.response?.data?.error || 'Something went wrong'),
     });
   }, [phoneInput, sendOtpMutation]);
 
@@ -400,6 +363,7 @@ export default function Profile() {
           setPhoneVisible(false);
           setPhoneStep('enter');
           setOtpInput('');
+          setDevOtpHint(null);
         },
         onError: (err: any) => Alert.alert('Verification Failed', err.response?.data?.error || 'Something went wrong'),
       }
@@ -410,6 +374,7 @@ export default function Profile() {
     setPhoneVisible(false);
     setPhoneStep('enter');
     setOtpInput('');
+    setDevOtpHint(null);
   }, []);
 
   const handleLogout = useCallback(() => {
@@ -429,34 +394,34 @@ export default function Profile() {
       <AmbientField />
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 60 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 110 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Top bar */}
         <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Text style={styles.backIcon}>‹</Text>
+          <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+            <Ionicons name="chevron-back" size={20} color={T.textPri} />
           </TouchableOpacity>
           <Text style={styles.topBarTitle}>Profile</Text>
-          <View style={{ width: 38 }} />
+          <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.iconBtn}>
+            <Ionicons name="settings-outline" size={18} color={T.textPri} />
+          </TouchableOpacity>
         </Animated.View>
 
-        {/* Hero identity card */}
         <Animated.View entering={FadeInDown.delay(70).springify().damping(16)} style={styles.heroWrap}>
           <GlassPanel style={styles.heroPanel} intensity={32}>
             <LinearGradient
-              colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
+              colors={['rgba(255,255,255,0.09)', 'rgba(255,255,255,0)']}
               start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.5 }}
               style={StyleSheet.absoluteFill}
             />
             <LinearGradient
-              colors={['rgba(124,138,255,0.10)', 'transparent']}
+              colors={['rgba(124,138,255,0.12)', 'transparent']}
               start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.8 }}
               style={StyleSheet.absoluteFill}
             />
 
             <View style={styles.heroCenter}>
-              <Avatar name={profile.name} onEdit={openEdit} />
+              <Avatar name={profile.name} onPress={() => setSettingsVisible(true)} />
               <Text style={styles.heroName}>{profile.name}</Text>
               <Text style={styles.heroEmail}>{profile.email}</Text>
 
@@ -473,101 +438,103 @@ export default function Profile() {
                 <Text style={styles.statCellLabel}>MEMBER SINCE</Text>
                 <Text style={styles.statCellValue}>{memberSince}</Text>
               </View>
-              <View style={styles.statCell}>
+              <View style={[styles.statCell, styles.statCellDivider]}>
                 <Text style={styles.statCellLabel}>ACCOUNT ID</Text>
                 <Text style={styles.statCellValue}>#{profile.id ? profile.id.slice(0, 6).toUpperCase() : '------'}</Text>
               </View>
-              <View style={styles.statCell}>
+              <View style={[styles.statCell, styles.statCellDivider]}>
                 <Text style={styles.statCellLabel}>STATUS</Text>
-                <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing…' : 'Active'}</Text>
+                <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing' : 'Active'}</Text>
               </View>
             </View>
           </GlassPanel>
         </Animated.View>
 
-        {/* Quick actions */}
-        <Animated.View entering={FadeInDown.delay(140).springify().damping(16)} style={styles.actionsPanelWrap}>
-          <GlassPanel style={styles.actionsPanel} intensity={24}>
-            <View style={styles.actionsRow}>
-              <ActionButton label="Edit Profile" icon="✎" color={T.accent} onPress={openEdit} />
-              <ActionButton label="Password" icon="⚿" color={T.gold} onPress={() => setPwdVisible(true)} />
-              <ActionButton label="Phone" icon="☎" color={T.violet} onPress={() => setPhoneVisible(true)} />
-              <ActionButton label="Logout" icon="⏻" color={T.loss} onPress={handleLogout} />
-            </View>
-          </GlassPanel>
-        </Animated.View>
-
-        {/* Personal information */}
-        <Animated.View entering={FadeInDown.delay(190).springify().damping(16)}>
+        <Animated.View entering={FadeInDown.delay(140).springify().damping(16)}>
           <SectionLabel text="Personal Information" />
           <GlassPanel style={styles.infoPanel} intensity={24}>
-            <InfoRow label="Full Name" value={profile.name} onPress={openEdit} />
-            <InfoRow label="Email Address" value={profile.email} onPress={openEdit} isLast />
-          </GlassPanel>
-        </Animated.View>
-
-        {/* Security */}
-        <Animated.View entering={FadeInDown.delay(230).springify().damping(16)}>
-          <SectionLabel text="Security" />
-          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <InfoRow icon="person-outline" label="Full Name" value={profile.name} />
+            <InfoRow icon="mail-outline" label="Email Address" value={profile.email} />
             <InfoRow
-              label="Password"
-              value={profile.provider === 'LOCAL' ? 'Change password' : 'Managed by Google'}
-              onPress={profile.provider === 'LOCAL' ? () => setPwdVisible(true) : undefined}
-            />
-            <InfoRow
+              icon="call-outline"
               label="Phone Number"
               value={profile.phoneNumber ?? 'Not added'}
               valueColor={profile.phoneVerified ? T.gain : undefined}
-              onPress={() => setPhoneVisible(true)}
-            />
-            <InfoRow
-              label="Google Account"
-              value={profile.provider === 'GOOGLE' ? 'Linked' : 'Not linked'}
-              valueColor={profile.provider === 'GOOGLE' ? T.gain : undefined}
               isLast
             />
           </GlassPanel>
         </Animated.View>
 
-        {/* Danger zone */}
-        <Animated.View entering={FadeInDown.delay(270).springify().damping(16)} style={{ marginTop: 4 }}>
-          <SectionLabel text="Danger Zone" />
+        <Animated.View entering={FadeInDown.delay(190).springify().damping(16)}>
+          <SectionLabel text="Security" />
+          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <InfoRow
+              icon="lock-closed-outline"
+              label="Password"
+              value={profile.provider === 'LOCAL' ? 'Set' : 'Managed by Google'}
+            />
+            <InfoRow
+              icon="shield-checkmark-outline"
+              label="Two-Step Verification"
+              value={profile.phoneVerified ? 'Enabled' : 'Not enabled'}
+              valueColor={profile.phoneVerified ? T.gain : undefined}
+              isLast
+            />
+          </GlassPanel>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(230).springify().damping(16)} style={{ marginTop: 6 }}>
           <Pressy onPress={handleLogout}>
-            <GlassPanel style={styles.dangerPanel} intensity={20}>
-              <Text style={styles.dangerText}>Log Out</Text>
-              <Text style={styles.dangerChevron}>›</Text>
+            <GlassPanel style={styles.logoutPanel} intensity={20}>
+              <Ionicons name="log-out-outline" size={17} color={T.loss} />
+              <Text style={styles.logoutText}>Log Out</Text>
             </GlassPanel>
           </Pressy>
         </Animated.View>
       </ScrollView>
 
-      {/* ── Edit Profile Sheet ───────────────────────────── */}
+      <SheetModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} title="Account Settings">
+        <SettingsMenuRow icon="person-outline" label="Edit Profile" sublabel="Name and email address" onPress={() => openFromMenu(openEdit)} />
+        <SettingsMenuRow
+          icon="lock-closed-outline"
+          label="Change Password"
+          sublabel={profile.provider === 'GOOGLE' ? 'Managed by Google' : 'Update your password'}
+          onPress={() => openFromMenu(openPassword)}
+          disabled={profile.provider === 'GOOGLE'}
+        />
+        <SettingsMenuRow icon="call-outline" label="Phone Number" sublabel={profile.phoneNumber ? 'Update or re-verify' : 'Add and verify a number'} onPress={() => openFromMenu(openPhone)} />
+      </SheetModal>
+
       <SheetModal visible={editVisible} onClose={() => setEditVisible(false)} title="Edit Profile">
         <SheetInput label="Full Name" value={editName} onChangeText={setEditName} placeholder="Your name" />
         <SheetInput label="Email Address" value={editEmail} onChangeText={setEditEmail} placeholder="you@example.com" keyboardType="email-address" />
         <SheetPrimaryButton label="Save Changes" onPress={handleSaveProfile} loading={saving} />
       </SheetModal>
 
-      {/* ── Change Password Sheet ───────────────────────────── */}
       <SheetModal visible={pwdVisible} onClose={() => setPwdVisible(false)} title="Change Password">
         <SheetInput label="Current Password" value={currentPwd} onChangeText={setCurrentPwd} secureTextEntry placeholder="••••••••" />
         <SheetInput label="New Password" value={newPwd} onChangeText={setNewPwd} secureTextEntry placeholder="••••••••" />
         <SheetInput label="Confirm New Password" value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry placeholder="••••••••" />
-        <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number & a symbol.</Text>
+        <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number and a symbol.</Text>
         <SheetPrimaryButton label="Update Password" onPress={handleChangePassword} loading={changingPwd} />
       </SheetModal>
 
-      {/* ── Phone Verify Sheet ───────────────────────────── */}
-      <SheetModal visible={phoneVisible} onClose={closePhoneSheet} title={phoneStep === 'enter' ? 'Add Phone Number' : 'Verify OTP'}>
+      <SheetModal visible={phoneVisible} onClose={closePhoneSheet} title={phoneStep === 'enter' ? 'Add Phone Number' : 'Verify Code'}>
         {phoneStep === 'enter' ? (
           <>
-            <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+92 300 1234567" keyboardType="phone-pad" />
-            <SheetPrimaryButton label="Send OTP" onPress={handleSendOtp} loading={sendingOtp} />
+            <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+923001234567" keyboardType="phone-pad" />
+            <Text style={styles.sheetHint}>Include your country code, starting with a plus sign.</Text>
+            <SheetPrimaryButton label="Send Code" onPress={handleSendOtp} loading={sendingOtp} />
           </>
         ) : (
           <>
             <Text style={styles.sheetHint}>We sent a 6-digit code to {phoneInput}.</Text>
+            {devOtpHint && (
+              <View style={styles.devHintBox}>
+                <Ionicons name="information-circle-outline" size={14} color={T.gold} />
+                <Text style={styles.devHintText}>Development code: {devOtpHint}</Text>
+              </View>
+            )}
             <SheetInput label="Verification Code" value={otpInput} onChangeText={setOtpInput} placeholder="••••••" keyboardType="number-pad" />
             <SheetPrimaryButton label="Verify Phone" onPress={handleVerifyOtp} loading={verifyingOtp} />
           </>
@@ -577,80 +544,73 @@ export default function Profile() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
   ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.14 },
 
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
-  backBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
-  backIcon: { fontSize: 22, color: T.textPri, marginTop: -2 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  iconBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
   topBarTitle: { fontSize: 16, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2 },
 
-  heroWrap: { marginBottom: 16, borderRadius: 26, shadowColor: T.accentDeep, shadowOpacity: 0.28, shadowRadius: 30, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
+  heroWrap: { marginBottom: 18, borderRadius: 26, shadowColor: T.accentDeep, shadowOpacity: 0.26, shadowRadius: 28, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
   heroPanel: { borderRadius: 26, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
   heroCenter: { alignItems: 'center' },
 
-  avatarWrap: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  avatarRing: { position: 'absolute', width: 96, height: 96, borderRadius: 48, padding: 2.5 },
-  avatarRingGradient: { flex: 1, borderRadius: 48 },
-  avatarInner: { width: 86, height: 86, borderRadius: 43, backgroundColor: '#14151C', justifyContent: 'center', alignItems: 'center' },
-  avatarInitials: { fontSize: 28, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.5 },
-  avatarEditBtn: { position: 'absolute', bottom: -2, right: -2, width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center', overflow: 'hidden', borderWidth: 2, borderColor: T.bg0 },
-  avatarEditIcon: { fontSize: 13, color: '#fff' },
+  avatarWrap: { marginBottom: 14 },
+  avatarBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
+  avatarRing: { position: 'absolute', top: 0, left: 0, width: 88, height: 88, borderRadius: 44, padding: 2.5 },
+  avatarRingGradient: { flex: 1, borderRadius: 44 },
+  avatarInner: { width: 78, height: 78, borderRadius: 39, backgroundColor: '#14151C', justifyContent: 'center', alignItems: 'center' },
+  avatarInitials: { fontSize: 25, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.5 },
 
   heroName: { fontSize: 21, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.3, marginBottom: 3 },
-  heroEmail: { fontSize: 13, fontFamily: FontFamily.body, color: T.textSec, marginBottom: 14 },
+  heroEmail: { fontSize: 13, fontFamily: FontFamily.body, color: T.textSec, marginBottom: 15 },
 
   badgeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center' },
-  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.02)' },
   badgeText: { fontSize: 10.5, fontFamily: FontFamily.heading, letterSpacing: 0.2 },
 
   heroDivider: { height: 1, backgroundColor: T.hairline, marginVertical: 18 },
   statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
-  statCell: { alignItems: 'flex-start' },
+  statCell: { alignItems: 'flex-start', flex: 1 },
+  statCellDivider: { borderLeftWidth: 1, borderLeftColor: T.hairline, paddingLeft: 12 },
   statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6, marginBottom: 4 },
   statCellValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
-
-  actionsPanelWrap: { marginBottom: 20, borderRadius: 22 },
-  actionsPanel: { borderRadius: 22, paddingVertical: 18, paddingHorizontal: 10, borderWidth: 1, borderColor: T.glassBorder },
-  actionsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  actionIconShell: { width: 52, height: 52, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: T.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 8, overflow: 'hidden' },
-  actionIcon: { fontSize: 19, fontFamily: FontFamily.heading },
-  actionLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textSec, letterSpacing: 0.2 },
 
   sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: 4 },
   sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
   sectionLabelText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2, flex: 1 },
 
-  infoPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 16, marginBottom: 18 },
+  infoPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 16, marginBottom: 18, shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 15 },
   infoRowBorder: { borderBottomWidth: 1, borderBottomColor: T.hairline },
+  infoLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   infoLabel: { fontSize: 13, fontFamily: FontFamily.bodyMedium, color: T.textSec },
-  infoRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '60%' },
-  infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
-  infoChevron: { fontSize: 17, color: T.textTer, marginTop: -2 },
+  infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, maxWidth: '48%', textAlign: 'right' },
 
-  dangerPanel: { borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.18)', paddingVertical: 16, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dangerText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
-  dangerChevron: { fontSize: 18, color: T.loss },
+  logoutPanel: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.2)', paddingVertical: 16 },
+  logoutText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
 
-  // Sheet modal
   sheet: { backgroundColor: '#0B0C11', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 12, borderWidth: 1, borderColor: T.glassBorderHi, borderBottomWidth: 0 },
   sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: T.hairline, alignSelf: 'center', marginBottom: 16 },
   sheetHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
   sheetTitle: { fontSize: 17, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2 },
   sheetCloseBtn: { width: 30, height: 30, borderRadius: 10, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
-  sheetCloseIcon: { fontSize: 12, color: T.textSec },
 
   sheetInputLabel: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.4, marginBottom: 7 },
-  sheetInputBox: { backgroundColor: 'rgba(255,255,255,0.035)', borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14 },
+  sheetInputBox: { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14 },
   sheetInputText: { fontSize: 14, fontFamily: FontFamily.body, color: T.textPri, paddingVertical: 13 },
   sheetHint: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, lineHeight: 16, marginBottom: 14 },
 
+  devHintBox: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(232,182,86,0.1)', borderWidth: 1, borderColor: 'rgba(232,182,86,0.24)', borderRadius: 10, paddingHorizontal: 11, paddingVertical: 9, marginBottom: 14 },
+  devHintText: { fontSize: 11.5, fontFamily: FontFamily.bodyMedium, color: T.gold },
+
   sheetPrimaryBtn: { height: 50, borderRadius: 15, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
   sheetPrimaryBtnText: { fontSize: 14, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 0.2 },
+
+  menuRow: { flexDirection: 'row', alignItems: 'center', gap: 13, paddingVertical: 13 },
+  menuIconShell: { width: 38, height: 38, borderRadius: 12, backgroundColor: 'rgba(124,138,255,0.12)', justifyContent: 'center', alignItems: 'center' },
+  menuLabel: { fontSize: 14, fontFamily: FontFamily.heading, color: T.textPri },
+  menuSublabel: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
 });
