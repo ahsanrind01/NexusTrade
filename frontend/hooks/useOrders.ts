@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '../lib/api';
+import { useAuthStore } from '../stores/authStore';
 import { useOrderStore, Order, Trade, OrderSide, OrderType } from '../stores/orderStore';
 
 export interface OrderBookLevel {
@@ -49,10 +50,12 @@ async function cancelOrderRequest(orderId: string) {
 // GET /orders/my-orders — the source of truth for a user's open + historical orders.
 export function useMyOrders() {
   const setOrders = useOrderStore((s) => s.setOrders);
+  const token = useAuthStore((s) => s.token);
 
   const query = useQuery({
     queryKey: ['orders', 'my-orders'],
     queryFn: fetchMyOrders,
+    enabled: !!token,
     staleTime: 1000 * 15,
     refetchInterval: 1000 * 20,
     retry: 2,
@@ -68,10 +71,12 @@ export function useMyOrders() {
 // GET /orders/my-trades — fills/executions, separate from the resting orders list.
 export function useMyTrades() {
   const setTrades = useOrderStore((s) => s.setTrades);
+  const token = useAuthStore((s) => s.token);
 
   const query = useQuery({
     queryKey: ['orders', 'my-trades'],
     queryFn: fetchMyTrades,
+    enabled: !!token,
     staleTime: 1000 * 20,
     retry: 2,
   });
@@ -87,9 +92,12 @@ export function useMyTrades() {
 // the order-service DB, the same orders the matching-engine works through),
 // not a mock/random book. Polls fairly often since depth can move quickly.
 export function useOrderBook(asset: string) {
+  const token = useAuthStore((s) => s.token);
+
   return useQuery({
     queryKey: ['orders', 'orderbook', asset],
     queryFn: () => fetchOrderBook(asset),
+    enabled: !!asset && !!token,
     staleTime: 1000 * 3,
     refetchInterval: 1000 * 4,
     retry: 1,
@@ -131,9 +139,10 @@ export function useCancelOrder() {
 
   return useMutation({
     mutationFn: cancelOrderRequest,
-    onSuccess: (_data, orderId) => {
+    onSuccess: (data, orderId) => {
       removeOrder(orderId);
       queryClient.invalidateQueries({ queryKey: ['orders', 'my-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['orders', 'orderbook', data.order.asset] });
     },
   });
 }

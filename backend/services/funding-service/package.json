@@ -15,6 +15,7 @@
     "express": "^4.19.2",
     "kafkajs": "^2.2.4",
     "postgres": "^3.4.4",
+    "stripe": "^22.3.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

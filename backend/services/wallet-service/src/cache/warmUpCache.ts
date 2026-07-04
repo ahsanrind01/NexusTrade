@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { ledgerDb } from '../config/ledgerDb';
-import { redis } from '../config/redis';
+import { setWalletBalance } from '../services/walletState';
 
 export const warmUpCache = async () => {
   console.log('[Wallet Cache] Starting warm up from ledger DB...');
@@ -29,7 +29,7 @@ export const warmUpCache = async () => {
       };
 
       const redisKey = `wallet:${user_id}`;
-      await redis.hset(redisKey, asset.toUpperCase(), parseFloat(balance));
+      await setWalletBalance(user_id, asset.toUpperCase(), parseFloat(balance), parseFloat(balance), 0);
       console.log(`[Wallet Cache] ${user_id} → ${asset}: ${balance}`);
     }
 

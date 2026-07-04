@@ -44,6 +44,7 @@ src/
   config/
     db.ts
     kafka.ts
+    stripe.ts
   controllers/
     fundingController.ts
     webhookController.ts
@@ -117,6 +118,14 @@ export const disconnectKafka = async (): Promise<void> => {
     console.log('🔌 [Funding Service] Kafka Producer disconnected');
   }
 };
+</file>
+
+<file path="src/config/stripe.ts">
+import Stripe from "stripe";
+
+export const stripe = new Stripe(
+  process.env.STRIPE_SECRET_KEY!
+);
 </file>
 
 <file path="src/controllers/fundingController.ts">
@@ -468,6 +477,7 @@ import { Kafka } from 'kafkajs';
 import { db } from '../config/db';
 import { fundingTransactions } from '../db/schema';
 import { eq } from 'drizzle-orm';
+import { ensureKafkaTopics } from '../../../../shared/src/kafka/bootstrapTopics';
 
 const kafka = new Kafka({
   clientId: 'funding-service',
@@ -478,6 +488,10 @@ const consumer = kafka.consumer({ groupId: 'funding-withdrawal-group' });
 
 export const startWithdrawalConsumer = async () => {
   try {
+    await ensureKafkaTopics('funding-service', [
+      'withdrawal-validated',
+      'withdrawal-rejected',
+    ]);
     await consumer.connect();
     
     await consumer.subscribe({ topic: 'withdrawal-validated', fromBeginning: true });
@@ -590,6 +604,7 @@ export default defineConfig({
     "express": "^4.19.2",
     "kafkajs": "^2.2.4",
     "postgres": "^3.4.4",
+    "stripe": "^22.3.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

@@ -7,7 +7,15 @@
       "bundler": "metro"
     },
     "plugins": [
-      "expo-font"
-    ]
+  "expo-font",
+  "expo-web-browser",
+  [
+    "@stripe/stripe-react-native",
+    {
+      "merchantIdentifier": "merchant.com.nexustrade.app",
+      "enableGooglePay": true
+    }
+  ]
+]
   }
 }

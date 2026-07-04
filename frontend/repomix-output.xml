@@ -886,7 +886,10 @@ const styles = StyleSheet.create({
 
 <file path="app/(tabs)/_layout.tsx">
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
 import Animated, {
   useSharedValue, useAnimatedStyle,
@@ -899,125 +902,88 @@ try { BlurView = require('expo-blur').BlurView; } catch {}
 
 const T = {
   bg0: '#06070A',
-  glass: 'rgba(255,255,255,0.035)',
-  glassBorderHi: 'rgba(255,255,255,0.13)',
+  glassBorderHi: 'rgba(255,255,255,0.12)',
   accent: '#7C8AFF',
-  textPri: '#F4F5F7',
-  textTer: '#5B6072',
+  accentDeep: '#5B63E8',
+  violet: '#B583FF',
+  textPri: '#F7F8FA',
+  textTer: '#60657A',
 };
 
-const TABS = [
-  { name: 'index',   label: 'Home',    icon: '⌂' },
-  { name: 'market',  label: 'Market',  icon: '◈' },
-  { name: 'trade',   label: 'Trade',   icon: '⇅' },
-  { name: 'wallet',  label: 'Wallet',  icon: '◇' },
-  { name: 'profile', label: 'Profile', icon: '○' },
+const TABS: { name: string; label: string; icon: keyof typeof Ionicons.glyphMap; iconFocused: keyof typeof Ionicons.glyphMap }[] = [
+  { name: 'index', label: 'Home', icon: 'home-outline', iconFocused: 'home' },
+  { name: 'market', label: 'Market', icon: 'bar-chart-outline', iconFocused: 'bar-chart' },
+  { name: 'trade', label: 'Trade', icon: 'swap-horizontal-outline', iconFocused: 'swap-horizontal' },
+  { name: 'wallet', label: 'Wallet', icon: 'wallet-outline', iconFocused: 'wallet' },
+  { name: 'profile', label: 'Profile', icon: 'person-outline', iconFocused: 'person' },
 ];
 
-// ─── TabIcon ──────────────────────────────────────────────────────────────────
-// FIX [1]: Removed animated `color` from useAnimatedStyle — Reanimated cannot
-//          interpolate text color on the UI thread. It was silently failing and
-//          causing the press to feel broken. Color is now switched via static
-//          conditional styles, which React handles natively and instantly.
-//
-// FIX [2]: Separated the glow background animation from the pill animation.
-//          Previously both used `glowStyle` which contained a `scale` transform.
-//          That scale was expanding the iconGlowBg OUTSIDE the tab bar bounds,
-//          causing the visible "box jumping" effect. Now:
-//          - glowBg: only animates opacity (fades in/out, no transform)
-//          - pill:   only animates opacity (no scale, no transform)
-//          - icon:   only animates scale (the container, not individual elements)
-//
-// FIX [3]: `withTiming` inside `useAnimatedStyle` return object is valid but
-//          every focus change was creating new animation instances. Moved to
-//          explicit `useEffect` → `withSpring/withTiming` on shared values only.
-
-function TabIcon({ label, focused, icon }: { label: string; focused: boolean; icon: string }) {
-  const scale = useSharedValue(1);
-  const glowOpacity = useSharedValue(0);  // FIX [2]: separate from scale
+function TabIcon({ label, focused, icon, iconFocused }: { label: string; focused: boolean; icon: keyof typeof Ionicons.glyphMap; iconFocused: keyof typeof Ionicons.glyphMap }) {
+  const lift = useSharedValue(0);
 
   useEffect(() => {
-    // FIX [3]: animations only on shared values, not inside animatedStyle
-    scale.value = withSpring(focused ? 1.06 : 1, { damping: 16, stiffness: 200 });
-    glowOpacity.value = withTiming(focused ? 1 : 0, { duration: 200 });
+    lift.value = withSpring(focused ? 1 : 0, { damping: 15, stiffness: 190 });
   }, [focused]);
 
-  // Only scale the outer container — nothing else transforms
-  const containerStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+  const iconWrapStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: interpolate(lift.value, [0, 1], [0, -1]) }, { scale: interpolate(lift.value, [0, 1], [1, 1.08]) }],
   }));
-
-  // FIX [2]: glow bg only fades, never scales — this was the "box jumping outside" bug
-  const glowBgStyle = useAnimatedStyle(() => ({
-    opacity: glowOpacity.value,
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: lift.value,
+    transform: [{ scale: interpolate(lift.value, [0, 1], [0.7, 1]) }],
   }));
-
-  // FIX [2]: pill only fades, no transform
   const pillStyle = useAnimatedStyle(() => ({
-    opacity: glowOpacity.value,
-  }));
-
-  // FIX [1]: icon opacity only — no color animation via Reanimated
-  const iconOpacityStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(glowOpacity.value, [0, 1], [0.4, 1]),
+    opacity: lift.value,
+    transform: [{ scaleX: interpolate(lift.value, [0, 1], [0.3, 1]) }],
   }));
 
   return (
-    <Animated.View style={[styles.tabItem, containerStyle]}>
-      <View style={styles.iconWrap}>
-        {/* FIX [2]: glowBg uses only opacity, no scale transform */}
-        <Animated.View style={[styles.iconGlowBg, glowBgStyle]} />
-
-        {/* FIX [1]: color switched via static styles, not animated */}
-        <Animated.Text
-          style={[
-            styles.tabIcon,
-            iconOpacityStyle,
-            focused ? styles.tabIconFocused : styles.tabIconUnfocused,
-          ]}
-        >
-          {icon}
-        </Animated.Text>
-      </View>
-
-      {/* FIX [1]: label color via static conditional style */}
-      <Text
-        style={[
-          styles.tabLabel,
-          focused ? styles.tabLabelFocused : styles.tabLabelUnfocused,
-        ]}
-      >
+    <View style={styles.tabItem}>
+      <Animated.View style={[styles.iconWrap, iconWrapStyle]}>
+        <Animated.View style={[styles.iconGlow, glowStyle]} />
+        <Ionicons
+          name={focused ? iconFocused : icon}
+          size={21}
+          color={focused ? T.textPri : T.textTer}
+        />
+      </Animated.View>
+      <Text style={[styles.tabLabel, focused ? styles.tabLabelFocused : styles.tabLabelUnfocused]}>
         {label}
       </Text>
-
-      {/* FIX [2]: pill uses only opacity, no transform */}
       <Animated.View style={[styles.activePill, pillStyle]} />
-    </Animated.View>
+    </View>
   );
 }
 
-// ─── Tab bar background ───────────────────────────────────────────────────────
 function TabBarBackground() {
-  if (BlurView) {
-    return (
-      <View style={styles.tabBarBg}>
-        <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, styles.tabBarOverlay]} />
-      </View>
-    );
-  }
-  // Fallback: solid dark overlay, visually identical without blur
   return (
-    <View style={[styles.tabBarBg, styles.tabBarFallback]} />
+    <View style={styles.tabBarBg}>
+      {BlurView ? (
+        <>
+          <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, styles.tabBarOverlay]} />
+        </>
+      ) : (
+        <View style={[StyleSheet.absoluteFill, styles.tabBarFallback]} />
+      )}
+      <LinearGradient
+        colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.16)', 'rgba(255,255,255,0)']}
+        start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+        style={styles.topHairline}
+      />
+    </View>
   );
 }
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+  const barHeight = 58 + insets.bottom;
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [styles.tabBar, { height: barHeight }],
         tabBarBackground: () => <TabBarBackground />,
       }}
     >
@@ -1028,7 +994,7 @@ export default function TabLayout() {
           options={{
             tabBarLabel: () => null,
             tabBarIcon: ({ focused }) => (
-              <TabIcon label={tab.label} focused={focused} icon={tab.icon} />
+              <TabIcon label={tab.label} focused={focused} icon={tab.icon} iconFocused={tab.iconFocused} />
             ),
           }}
         />
@@ -1044,65 +1010,61 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabBar: {
     position: 'absolute',
-    height: Platform.OS === 'ios' ? 86 : 72,
     borderTopWidth: 0,
     backgroundColor: 'transparent',
     elevation: 0,
   },
   tabBarBg: {
     flex: 1,
-    borderTopWidth: 1,
-    borderTopColor: T.glassBorderHi,
     overflow: 'hidden',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
   },
   tabBarOverlay: {
     backgroundColor: 'rgba(6,7,10,0.55)',
   },
   tabBarFallback: {
-    backgroundColor: 'rgba(6,7,10,0.92)',
+    backgroundColor: 'rgba(6,7,10,0.94)',
+  },
+  topHairline: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: 1,
   },
 
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingTop: 10,
+    marginTop: 15,
+    gap: 5,
+    paddingTop: 12,
     minWidth: 56,
   },
   iconWrap: {
     width: 40,
-    height: 34,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // FIX [2]: position absolute so it never affects layout / never "jumps out"
-  iconGlowBg: {
+  iconGlow: {
     position: 'absolute',
-    width: 40,
+    width: 34,
     height: 30,
-    borderRadius: 10,
-    backgroundColor: 'rgba(124,138,255,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(124,138,255,0.22)',
+    borderRadius: 15,
+    backgroundColor: 'rgba(124,138,255,0.16)',
   },
-  tabIcon: {
-    fontSize: 18,
-    fontFamily: FontFamily.heading,
-  },
-  tabIconFocused:   { color: T.textPri },
-  tabIconUnfocused: { color: T.textTer },
 
   tabLabel: {
-    fontSize: 9,
+    fontSize: 9.5,
     fontFamily: FontFamily.bodyMedium,
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
   },
-  tabLabelFocused:   { color: T.accent },
+  tabLabelFocused: { color: T.accent },
   tabLabelUnfocused: { color: T.textTer },
 
   activePill: {
-    width: 18,
-    height: 2.5,
+    width: 16,
+    height: 3,
     borderRadius: 2,
     backgroundColor: T.accent,
     marginTop: 1,
@@ -3549,18 +3511,19 @@ export default function Market() {
 import { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Dimensions, TextInput, KeyboardAvoidingView, Platform,
+  TextInput, KeyboardAvoidingView, Platform,
   Modal, Pressable, Alert,
 } from 'react-native';
 import Animated, {
   FadeIn, FadeInDown, FadeInUp, FadeOut,
   useSharedValue, useAnimatedStyle,
-  withSpring, withTiming, withSequence, withRepeat,
-  interpolate, Easing,
+  withSpring, withTiming, Easing,
+  interpolate,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
 import {
   useProfile, useUpdateProfile, useChangePassword,
@@ -3570,43 +3533,34 @@ import {
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
 
-const { width } = Dimensions.get('window');
-
-// ─────────────────────────────────────────────────────────────
-// THEME — mirrored 1:1 from the dashboard so this screen feels
-// like the same app, not a bolted-on page.
-// ─────────────────────────────────────────────────────────────
 const T = {
   bg0: '#06070A',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
 type Provider = 'LOCAL' | 'GOOGLE';
 
-// ─────────────────────────────────────────────────────────────
-// SHARED PRIMITIVES (same contract as dashboard's)
-// ─────────────────────────────────────────────────────────────
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -3614,49 +3568,33 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
-const PulseDot = memo(function PulseDot({ color }: { color: string }) {
-  const scale = useSharedValue(1);
-  const opacity = useSharedValue(0.9);
-  useEffect(() => {
-    scale.value = withRepeat(withSequence(withTiming(2.2, { duration: 1100 }), withTiming(1, { duration: 0 })), -1, false);
-    opacity.value = withRepeat(withSequence(withTiming(0, { duration: 1100 }), withTiming(0.9, { duration: 0 })), -1, false);
-  }, []);
-  const ringStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }], opacity: opacity.value }));
-  return (
-    <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
-      <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ringStyle]} />
-      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }} />
-    </View>
-  );
-});
-
 function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
-    drift.value = withRepeat(withTiming(1, { duration: 12000, easing: Easing.inOut(Easing.sin) }), -1, true);
+    drift.value = withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) });
   }, []);
   const orb1 = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 14]) }, { translateY: interpolate(drift.value, [0, 1], [-8, 10]) }],
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 16]) }, { translateY: interpolate(drift.value, [0, 1], [-10, 12]) }],
   }));
   const orb2 = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(drift.value, [0, 1], [10, -16]) }, { translateY: interpolate(drift.value, [0, 1], [6, -12]) }],
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [12, -18]) }, { translateY: interpolate(drift.value, [0, 1], [8, -14]) }],
   }));
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Animated.View style={[styles.ambientOrb, { top: -80, left: -60, backgroundColor: T.accentDeep }, orb1]} />
-      <Animated.View style={[styles.ambientOrb, { top: 220, right: -100, backgroundColor: T.violet, opacity: 0.10 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: -90, left: -70, backgroundColor: T.accentDeep }, orb1]} />
+      <Animated.View style={[styles.ambientOrb, { top: 220, right: -110, backgroundColor: T.violet, opacity: 0.09 }, orb2]} />
     </View>
   );
 }
 
-// Press-scale wrapper, same feel as ActionButton on the dashboard.
-const Pressy = memo(function Pressy({ onPress, children, style }: any) {
+const Pressy = memo(function Pressy({ onPress, children, style, disabled }: any) {
   const press = useSharedValue(0);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.97]) }] }));
   return (
-    <Animated.View style={[animStyle, style]}>
+    <Animated.View style={[animStyle, style, disabled && { opacity: 0.45 }]}>
       <TouchableOpacity
         activeOpacity={1}
+        disabled={disabled}
         onPress={onPress}
         onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
         onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
@@ -3667,49 +3605,36 @@ const Pressy = memo(function Pressy({ onPress, children, style }: any) {
   );
 });
 
-// ─────────────────────────────────────────────────────────────
-// AVATAR — gradient ring, initials fallback, edit badge
-// ─────────────────────────────────────────────────────────────
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/);
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-const Avatar = memo(function Avatar({ name, onEdit }: { name: string; onEdit: () => void }) {
-  const shimmer = useSharedValue(0);
-  useEffect(() => {
-    shimmer.value = withRepeat(withTiming(1, { duration: 2600, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, []);
-  const ringStyle = useAnimatedStyle(() => ({ opacity: interpolate(shimmer.value, [0, 1], [0.6, 1]) }));
-
+const Avatar = memo(function Avatar({ name, onPress }: { name: string; onPress: () => void }) {
   return (
-    <View style={styles.avatarWrap}>
-      <Animated.View style={[styles.avatarRing, ringStyle]}>
-        <LinearGradient
-          colors={[T.violet, T.accent, T.accentDeep]}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={styles.avatarRingGradient}
-        />
-      </Animated.View>
-      <View style={styles.avatarInner}>
-        <Text style={styles.avatarInitials}>{getInitials(name || 'Trader')}</Text>
+    <Pressy onPress={onPress} style={styles.avatarWrap}>
+      <View style={styles.avatarBox}>
+        <View style={styles.avatarRing}>
+          <LinearGradient
+            colors={[T.violet, T.accent, T.accentDeep]}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={styles.avatarRingGradient}
+          />
+        </View>
+        <View style={styles.avatarInner}>
+          <Text style={styles.avatarInitials}>{getInitials(name || 'Trader')}</Text>
+        </View>
       </View>
-      <Pressy onPress={onEdit} style={styles.avatarEditBtn}>
-        <LinearGradient colors={[T.accentDeep, T.violet]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
-        <Text style={styles.avatarEditIcon}>✎</Text>
-      </Pressy>
-    </View>
+    </Pressy>
   );
 });
 
-// ─────────────────────────────────────────────────────────────
-// BADGES
-// ─────────────────────────────────────────────────────────────
 function ProviderBadge({ provider }: { provider: Provider }) {
   const isGoogle = provider === 'GOOGLE';
   return (
-    <View style={[styles.badge, { backgroundColor: isGoogle ? 'rgba(124,138,255,0.10)' : 'rgba(232,182,86,0.10)', borderColor: isGoogle ? 'rgba(124,138,255,0.22)' : 'rgba(232,182,86,0.22)' }]}>
+    <View style={[styles.badge, { borderColor: isGoogle ? 'rgba(124,138,255,0.28)' : 'rgba(232,182,86,0.28)' }]}>
+      <Ionicons name={isGoogle ? 'logo-google' : 'mail-outline'} size={12} color={isGoogle ? T.accent : T.gold} />
       <Text style={[styles.badgeText, { color: isGoogle ? T.accent : T.gold }]}>
         {isGoogle ? 'Google Account' : 'Email & Password'}
       </Text>
@@ -3719,54 +3644,24 @@ function ProviderBadge({ provider }: { provider: Provider }) {
 
 function VerifiedBadge({ verified }: { verified: boolean }) {
   return (
-    <View style={[styles.badge, { backgroundColor: verified ? T.gainDim : 'rgba(255,255,255,0.04)', borderColor: verified ? 'rgba(61,220,151,0.22)' : T.hairline }]}>
-      <PulseDot color={verified ? T.gain : T.textTer} />
-      <Text style={[styles.badgeText, { color: verified ? T.gain : T.textTer, marginLeft: 5 }]}>
+    <View style={[styles.badge, { borderColor: verified ? 'rgba(61,220,151,0.28)' : T.hairline }]}>
+      <Ionicons name={verified ? 'checkmark-circle' : 'ellipse-outline'} size={12} color={verified ? T.gain : T.textTer} />
+      <Text style={[styles.badgeText, { color: verified ? T.gain : T.textTer }]}>
         {verified ? 'Phone Verified' : 'Phone Unverified'}
       </Text>
     </View>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// QUICK ACTIONS ROW
-// ─────────────────────────────────────────────────────────────
-const ActionButton = memo(function ActionButton({ label, icon, color, onPress }: { label: string; icon: string; color: string; onPress: () => void }) {
-  const press = useSharedValue(0);
-  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.9]) }] }));
-  const glowStyle = useAnimatedStyle(() => ({ opacity: interpolate(press.value, [0, 1], [0, 1]) }));
+function InfoRow({ icon, label, value, valueColor, isLast }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; valueColor?: string; isLast?: boolean }) {
   return (
-    <Animated.View style={[{ flex: 1, alignItems: 'center' }, animStyle]}>
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={onPress}
-        onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
-        onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
-        style={{ alignItems: 'center' }}
-      >
-        <View style={styles.actionIconShell}>
-          <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 16, backgroundColor: color, opacity: 0.25 }, glowStyle]} />
-          <Text style={[styles.actionIcon, { color }]}>{icon}</Text>
-        </View>
-        <Text style={styles.actionLabel}>{label}</Text>
-      </TouchableOpacity>
-    </Animated.View>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────
-// INFO ROW — used inside Personal Info / Security panels
-// ─────────────────────────────────────────────────────────────
-function InfoRow({ label, value, onPress, valueColor, isLast }: { label: string; value: string; onPress?: () => void; valueColor?: string; isLast?: boolean }) {
-  const Wrapper: any = onPress ? TouchableOpacity : View;
-  return (
-    <Wrapper activeOpacity={0.7} onPress={onPress} style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <View style={styles.infoRightGroup}>
-        <Text style={[styles.infoValue, valueColor ? { color: valueColor } : {}]} numberOfLines={1}>{value}</Text>
-        {onPress && <Text style={styles.infoChevron}>›</Text>}
+    <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
+      <View style={styles.infoLeft}>
+        <Ionicons name={icon} size={15} color={T.textTer} />
+        <Text style={styles.infoLabel}>{label}</Text>
       </View>
-    </Wrapper>
+      <Text style={[styles.infoValue, valueColor ? { color: valueColor } : {}]} numberOfLines={1}>{value}</Text>
+    </View>
   );
 }
 
@@ -3779,9 +3674,6 @@ function SectionLabel({ text }: { text: string }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// BOTTOM SHEET MODAL SHELL — glass, slide-up, blurred backdrop
-// ─────────────────────────────────────────────────────────────
 function SheetModal({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
   const insets = useSafeAreaInsets();
   return (
@@ -3804,7 +3696,7 @@ function SheetModal({ visible, onClose, title, children }: { visible: boolean; o
             <View style={styles.sheetHeaderRow}>
               <Text style={styles.sheetTitle}>{title}</Text>
               <TouchableOpacity onPress={onClose} style={styles.sheetCloseBtn}>
-                <Text style={styles.sheetCloseIcon}>✕</Text>
+                <Ionicons name="close" size={16} color={T.textSec} />
               </TouchableOpacity>
             </View>
             {children}
@@ -3837,8 +3729,8 @@ function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType,
 
 function SheetPrimaryButton({ label, onPress, loading }: { label: string; onPress: () => void; loading?: boolean }) {
   return (
-    <Pressy onPress={loading ? undefined : onPress} style={{ marginTop: 6 }}>
-      <View style={[styles.sheetPrimaryBtn, loading && { opacity: 0.7 }]}>
+    <Pressy onPress={loading ? undefined : onPress} style={{ marginTop: 6 }} disabled={loading}>
+      <View style={styles.sheetPrimaryBtn}>
         <LinearGradient colors={[T.accentDeep, T.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />
         <Text style={styles.sheetPrimaryBtnText}>{loading ? 'Please wait…' : label}</Text>
       </View>
@@ -3846,9 +3738,21 @@ function SheetPrimaryButton({ label, onPress, loading }: { label: string; onPres
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// MAIN SCREEN
-// ─────────────────────────────────────────────────────────────
+function SettingsMenuRow({ icon, label, sublabel, onPress, disabled }: { icon: keyof typeof Ionicons.glyphMap; label: string; sublabel?: string; onPress: () => void; disabled?: boolean }) {
+  return (
+    <TouchableOpacity activeOpacity={disabled ? 1 : 0.65} onPress={disabled ? undefined : onPress} style={[styles.menuRow, disabled && { opacity: 0.4 }]}>
+      <View style={styles.menuIconShell}>
+        <Ionicons name={icon} size={17} color={T.accent} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.menuLabel}>{label}</Text>
+        {sublabel ? <Text style={styles.menuSublabel}>{sublabel}</Text> : null}
+      </View>
+      {!disabled && <Ionicons name="chevron-forward" size={16} color={T.textTer} />}
+    </TouchableOpacity>
+  );
+}
+
 export default function Profile() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -3860,19 +3764,17 @@ export default function Profile() {
   const verifyOtpMutation = useVerifyPhoneOtp();
   const logoutMutation = useLogout();
 
-  // Normalized view of the profile with safe fallbacks while the
-  // GET /auth/profile request is in flight (falls back to what
-  // login/signup already put in authStore).
   const profile = useMemo(() => ({
     id: user?.id ?? '',
     name: user?.name ?? 'Trader',
     email: user?.email ?? '',
     provider: (user?.provider ?? 'LOCAL') as Provider,
-    profileImage: user?.profileImage ?? null,
     phoneNumber: user?.phoneNumber ?? null,
     phoneVerified: user?.phoneVerified ?? false,
     createdAt: user?.createdAt ?? new Date().toISOString(),
   }), [user]);
+
+  const [settingsVisible, setSettingsVisible] = useState(false);
 
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState(profile.name);
@@ -3887,17 +3789,32 @@ export default function Profile() {
   const [phoneStep, setPhoneStep] = useState<'enter' | 'otp'>('enter');
   const [phoneInput, setPhoneInput] = useState(profile.phoneNumber ?? '');
   const [otpInput, setOtpInput] = useState('');
+  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
 
   const memberSince = useMemo(() => {
     const d = new Date(profile.createdAt);
     return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
   }, [profile.createdAt]);
 
+  const openFromMenu = useCallback((open: () => void) => {
+    setSettingsVisible(false);
+    setTimeout(open, 280);
+  }, []);
+
   const openEdit = useCallback(() => {
     setEditName(profile.name);
     setEditEmail(profile.email);
     setEditVisible(true);
   }, [profile.name, profile.email]);
+
+  const openPassword = useCallback(() => setPwdVisible(true), []);
+
+  const openPhone = useCallback(() => {
+    setPhoneInput(profile.phoneNumber ?? '');
+    setPhoneStep('enter');
+    setDevOtpHint(null);
+    setPhoneVisible(true);
+  }, [profile.phoneNumber]);
 
   const handleSaveProfile = useCallback(() => {
     if (!editName.trim() || !editEmail.trim()) {
@@ -3932,10 +3849,18 @@ export default function Profile() {
   }, [currentPwd, newPwd, confirmPwd, changePasswordMutation]);
 
   const handleSendOtp = useCallback(() => {
-    if (!phoneInput.trim()) return Alert.alert('Missing Field', 'Enter a phone number first.');
-    sendOtpMutation.mutate(phoneInput.trim(), {
-      onSuccess: () => setPhoneStep('otp'),
-      onError: (err: any) => Alert.alert('Failed to Send OTP', err.response?.data?.error || 'Something went wrong'),
+    const cleaned = phoneInput.trim();
+    if (!cleaned) return Alert.alert('Missing Field', 'Enter a phone number first.');
+    if (!cleaned.startsWith('+')) {
+      return Alert.alert('Include Country Code', 'Enter your number with a country code, e.g. +923001234567.');
+    }
+    setDevOtpHint(null);
+    sendOtpMutation.mutate(cleaned, {
+      onSuccess: (data: any) => {
+        setPhoneStep('otp');
+        if (data?.otp) setDevOtpHint(String(data.otp));
+      },
+      onError: (err: any) => Alert.alert('Failed to Send Code', err.response?.data?.error || 'Something went wrong'),
     });
   }, [phoneInput, sendOtpMutation]);
 
@@ -3948,6 +3873,7 @@ export default function Profile() {
           setPhoneVisible(false);
           setPhoneStep('enter');
           setOtpInput('');
+          setDevOtpHint(null);
         },
         onError: (err: any) => Alert.alert('Verification Failed', err.response?.data?.error || 'Something went wrong'),
       }
@@ -3958,6 +3884,7 @@ export default function Profile() {
     setPhoneVisible(false);
     setPhoneStep('enter');
     setOtpInput('');
+    setDevOtpHint(null);
   }, []);
 
   const handleLogout = useCallback(() => {
@@ -3977,34 +3904,34 @@ export default function Profile() {
       <AmbientField />
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 60 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 110 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Top bar */}
         <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Text style={styles.backIcon}>‹</Text>
+          <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+            <Ionicons name="chevron-back" size={20} color={T.textPri} />
           </TouchableOpacity>
           <Text style={styles.topBarTitle}>Profile</Text>
-          <View style={{ width: 38 }} />
+          <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.iconBtn}>
+            <Ionicons name="settings-outline" size={18} color={T.textPri} />
+          </TouchableOpacity>
         </Animated.View>
 
-        {/* Hero identity card */}
         <Animated.View entering={FadeInDown.delay(70).springify().damping(16)} style={styles.heroWrap}>
           <GlassPanel style={styles.heroPanel} intensity={32}>
             <LinearGradient
-              colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
+              colors={['rgba(255,255,255,0.09)', 'rgba(255,255,255,0)']}
               start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.5 }}
               style={StyleSheet.absoluteFill}
             />
             <LinearGradient
-              colors={['rgba(124,138,255,0.10)', 'transparent']}
+              colors={['rgba(124,138,255,0.12)', 'transparent']}
               start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.8 }}
               style={StyleSheet.absoluteFill}
             />
 
             <View style={styles.heroCenter}>
-              <Avatar name={profile.name} onEdit={openEdit} />
+              <Avatar name={profile.name} onPress={() => setSettingsVisible(true)} />
               <Text style={styles.heroName}>{profile.name}</Text>
               <Text style={styles.heroEmail}>{profile.email}</Text>
 
@@ -4021,101 +3948,103 @@ export default function Profile() {
                 <Text style={styles.statCellLabel}>MEMBER SINCE</Text>
                 <Text style={styles.statCellValue}>{memberSince}</Text>
               </View>
-              <View style={styles.statCell}>
+              <View style={[styles.statCell, styles.statCellDivider]}>
                 <Text style={styles.statCellLabel}>ACCOUNT ID</Text>
                 <Text style={styles.statCellValue}>#{profile.id ? profile.id.slice(0, 6).toUpperCase() : '------'}</Text>
               </View>
-              <View style={styles.statCell}>
+              <View style={[styles.statCell, styles.statCellDivider]}>
                 <Text style={styles.statCellLabel}>STATUS</Text>
-                <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing…' : 'Active'}</Text>
+                <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing' : 'Active'}</Text>
               </View>
             </View>
           </GlassPanel>
         </Animated.View>
 
-        {/* Quick actions */}
-        <Animated.View entering={FadeInDown.delay(140).springify().damping(16)} style={styles.actionsPanelWrap}>
-          <GlassPanel style={styles.actionsPanel} intensity={24}>
-            <View style={styles.actionsRow}>
-              <ActionButton label="Edit Profile" icon="✎" color={T.accent} onPress={openEdit} />
-              <ActionButton label="Password" icon="⚿" color={T.gold} onPress={() => setPwdVisible(true)} />
-              <ActionButton label="Phone" icon="☎" color={T.violet} onPress={() => setPhoneVisible(true)} />
-              <ActionButton label="Logout" icon="⏻" color={T.loss} onPress={handleLogout} />
-            </View>
-          </GlassPanel>
-        </Animated.View>
-
-        {/* Personal information */}
-        <Animated.View entering={FadeInDown.delay(190).springify().damping(16)}>
+        <Animated.View entering={FadeInDown.delay(140).springify().damping(16)}>
           <SectionLabel text="Personal Information" />
           <GlassPanel style={styles.infoPanel} intensity={24}>
-            <InfoRow label="Full Name" value={profile.name} onPress={openEdit} />
-            <InfoRow label="Email Address" value={profile.email} onPress={openEdit} isLast />
-          </GlassPanel>
-        </Animated.View>
-
-        {/* Security */}
-        <Animated.View entering={FadeInDown.delay(230).springify().damping(16)}>
-          <SectionLabel text="Security" />
-          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <InfoRow icon="person-outline" label="Full Name" value={profile.name} />
+            <InfoRow icon="mail-outline" label="Email Address" value={profile.email} />
             <InfoRow
-              label="Password"
-              value={profile.provider === 'LOCAL' ? 'Change password' : 'Managed by Google'}
-              onPress={profile.provider === 'LOCAL' ? () => setPwdVisible(true) : undefined}
-            />
-            <InfoRow
+              icon="call-outline"
               label="Phone Number"
               value={profile.phoneNumber ?? 'Not added'}
               valueColor={profile.phoneVerified ? T.gain : undefined}
-              onPress={() => setPhoneVisible(true)}
-            />
-            <InfoRow
-              label="Google Account"
-              value={profile.provider === 'GOOGLE' ? 'Linked' : 'Not linked'}
-              valueColor={profile.provider === 'GOOGLE' ? T.gain : undefined}
               isLast
             />
           </GlassPanel>
         </Animated.View>
 
-        {/* Danger zone */}
-        <Animated.View entering={FadeInDown.delay(270).springify().damping(16)} style={{ marginTop: 4 }}>
-          <SectionLabel text="Danger Zone" />
+        <Animated.View entering={FadeInDown.delay(190).springify().damping(16)}>
+          <SectionLabel text="Security" />
+          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <InfoRow
+              icon="lock-closed-outline"
+              label="Password"
+              value={profile.provider === 'LOCAL' ? 'Set' : 'Managed by Google'}
+            />
+            <InfoRow
+              icon="shield-checkmark-outline"
+              label="Two-Step Verification"
+              value={profile.phoneVerified ? 'Enabled' : 'Not enabled'}
+              valueColor={profile.phoneVerified ? T.gain : undefined}
+              isLast
+            />
+          </GlassPanel>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(230).springify().damping(16)} style={{ marginTop: 6 }}>
           <Pressy onPress={handleLogout}>
-            <GlassPanel style={styles.dangerPanel} intensity={20}>
-              <Text style={styles.dangerText}>Log Out</Text>
-              <Text style={styles.dangerChevron}>›</Text>
+            <GlassPanel style={styles.logoutPanel} intensity={20}>
+              <Ionicons name="log-out-outline" size={17} color={T.loss} />
+              <Text style={styles.logoutText}>Log Out</Text>
             </GlassPanel>
           </Pressy>
         </Animated.View>
       </ScrollView>
 
-      {/* ── Edit Profile Sheet ───────────────────────────── */}
+      <SheetModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} title="Account Settings">
+        <SettingsMenuRow icon="person-outline" label="Edit Profile" sublabel="Name and email address" onPress={() => openFromMenu(openEdit)} />
+        <SettingsMenuRow
+          icon="lock-closed-outline"
+          label="Change Password"
+          sublabel={profile.provider === 'GOOGLE' ? 'Managed by Google' : 'Update your password'}
+          onPress={() => openFromMenu(openPassword)}
+          disabled={profile.provider === 'GOOGLE'}
+        />
+        <SettingsMenuRow icon="call-outline" label="Phone Number" sublabel={profile.phoneNumber ? 'Update or re-verify' : 'Add and verify a number'} onPress={() => openFromMenu(openPhone)} />
+      </SheetModal>
+
       <SheetModal visible={editVisible} onClose={() => setEditVisible(false)} title="Edit Profile">
         <SheetInput label="Full Name" value={editName} onChangeText={setEditName} placeholder="Your name" />
         <SheetInput label="Email Address" value={editEmail} onChangeText={setEditEmail} placeholder="you@example.com" keyboardType="email-address" />
         <SheetPrimaryButton label="Save Changes" onPress={handleSaveProfile} loading={saving} />
       </SheetModal>
 
-      {/* ── Change Password Sheet ───────────────────────────── */}
       <SheetModal visible={pwdVisible} onClose={() => setPwdVisible(false)} title="Change Password">
         <SheetInput label="Current Password" value={currentPwd} onChangeText={setCurrentPwd} secureTextEntry placeholder="••••••••" />
         <SheetInput label="New Password" value={newPwd} onChangeText={setNewPwd} secureTextEntry placeholder="••••••••" />
         <SheetInput label="Confirm New Password" value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry placeholder="••••••••" />
-        <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number & a symbol.</Text>
+        <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number and a symbol.</Text>
         <SheetPrimaryButton label="Update Password" onPress={handleChangePassword} loading={changingPwd} />
       </SheetModal>
 
-      {/* ── Phone Verify Sheet ───────────────────────────── */}
-      <SheetModal visible={phoneVisible} onClose={closePhoneSheet} title={phoneStep === 'enter' ? 'Add Phone Number' : 'Verify OTP'}>
+      <SheetModal visible={phoneVisible} onClose={closePhoneSheet} title={phoneStep === 'enter' ? 'Add Phone Number' : 'Verify Code'}>
         {phoneStep === 'enter' ? (
           <>
-            <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+92 300 1234567" keyboardType="phone-pad" />
-            <SheetPrimaryButton label="Send OTP" onPress={handleSendOtp} loading={sendingOtp} />
+            <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+923001234567" keyboardType="phone-pad" />
+            <Text style={styles.sheetHint}>Include your country code, starting with a plus sign.</Text>
+            <SheetPrimaryButton label="Send Code" onPress={handleSendOtp} loading={sendingOtp} />
           </>
         ) : (
           <>
             <Text style={styles.sheetHint}>We sent a 6-digit code to {phoneInput}.</Text>
+            {devOtpHint && (
+              <View style={styles.devHintBox}>
+                <Ionicons name="information-circle-outline" size={14} color={T.gold} />
+                <Text style={styles.devHintText}>Development code: {devOtpHint}</Text>
+              </View>
+            )}
             <SheetInput label="Verification Code" value={otpInput} onChangeText={setOtpInput} placeholder="••••••" keyboardType="number-pad" />
             <SheetPrimaryButton label="Verify Phone" onPress={handleVerifyOtp} loading={verifyingOtp} />
           </>
@@ -4125,82 +4054,75 @@ export default function Profile() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
   ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.14 },
 
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
-  backBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
-  backIcon: { fontSize: 22, color: T.textPri, marginTop: -2 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  iconBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
   topBarTitle: { fontSize: 16, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2 },
 
-  heroWrap: { marginBottom: 16, borderRadius: 26, shadowColor: T.accentDeep, shadowOpacity: 0.28, shadowRadius: 30, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
+  heroWrap: { marginBottom: 18, borderRadius: 26, shadowColor: T.accentDeep, shadowOpacity: 0.26, shadowRadius: 28, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
   heroPanel: { borderRadius: 26, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
   heroCenter: { alignItems: 'center' },
 
-  avatarWrap: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  avatarRing: { position: 'absolute', width: 96, height: 96, borderRadius: 48, padding: 2.5 },
-  avatarRingGradient: { flex: 1, borderRadius: 48 },
-  avatarInner: { width: 86, height: 86, borderRadius: 43, backgroundColor: '#14151C', justifyContent: 'center', alignItems: 'center' },
-  avatarInitials: { fontSize: 28, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.5 },
-  avatarEditBtn: { position: 'absolute', bottom: -2, right: -2, width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center', overflow: 'hidden', borderWidth: 2, borderColor: T.bg0 },
-  avatarEditIcon: { fontSize: 13, color: '#fff' },
+  avatarWrap: { marginBottom: 14 },
+  avatarBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
+  avatarRing: { position: 'absolute', top: 0, left: 0, width: 88, height: 88, borderRadius: 44, padding: 2.5 },
+  avatarRingGradient: { flex: 1, borderRadius: 44 },
+  avatarInner: { width: 78, height: 78, borderRadius: 39, backgroundColor: '#14151C', justifyContent: 'center', alignItems: 'center' },
+  avatarInitials: { fontSize: 25, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.5 },
 
   heroName: { fontSize: 21, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.3, marginBottom: 3 },
-  heroEmail: { fontSize: 13, fontFamily: FontFamily.body, color: T.textSec, marginBottom: 14 },
+  heroEmail: { fontSize: 13, fontFamily: FontFamily.body, color: T.textSec, marginBottom: 15 },
 
   badgeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center' },
-  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.02)' },
   badgeText: { fontSize: 10.5, fontFamily: FontFamily.heading, letterSpacing: 0.2 },
 
   heroDivider: { height: 1, backgroundColor: T.hairline, marginVertical: 18 },
   statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
-  statCell: { alignItems: 'flex-start' },
+  statCell: { alignItems: 'flex-start', flex: 1 },
+  statCellDivider: { borderLeftWidth: 1, borderLeftColor: T.hairline, paddingLeft: 12 },
   statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6, marginBottom: 4 },
   statCellValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
-
-  actionsPanelWrap: { marginBottom: 20, borderRadius: 22 },
-  actionsPanel: { borderRadius: 22, paddingVertical: 18, paddingHorizontal: 10, borderWidth: 1, borderColor: T.glassBorder },
-  actionsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  actionIconShell: { width: 52, height: 52, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: T.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 8, overflow: 'hidden' },
-  actionIcon: { fontSize: 19, fontFamily: FontFamily.heading },
-  actionLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textSec, letterSpacing: 0.2 },
 
   sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: 4 },
   sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
   sectionLabelText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2, flex: 1 },
 
-  infoPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 16, marginBottom: 18 },
+  infoPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 16, marginBottom: 18, shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 15 },
   infoRowBorder: { borderBottomWidth: 1, borderBottomColor: T.hairline },
+  infoLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   infoLabel: { fontSize: 13, fontFamily: FontFamily.bodyMedium, color: T.textSec },
-  infoRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '60%' },
-  infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
-  infoChevron: { fontSize: 17, color: T.textTer, marginTop: -2 },
+  infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, maxWidth: '48%', textAlign: 'right' },
 
-  dangerPanel: { borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.18)', paddingVertical: 16, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dangerText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
-  dangerChevron: { fontSize: 18, color: T.loss },
+  logoutPanel: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.2)', paddingVertical: 16 },
+  logoutText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
 
-  // Sheet modal
   sheet: { backgroundColor: '#0B0C11', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 12, borderWidth: 1, borderColor: T.glassBorderHi, borderBottomWidth: 0 },
   sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: T.hairline, alignSelf: 'center', marginBottom: 16 },
   sheetHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
   sheetTitle: { fontSize: 17, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2 },
   sheetCloseBtn: { width: 30, height: 30, borderRadius: 10, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
-  sheetCloseIcon: { fontSize: 12, color: T.textSec },
 
   sheetInputLabel: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.4, marginBottom: 7 },
-  sheetInputBox: { backgroundColor: 'rgba(255,255,255,0.035)', borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14 },
+  sheetInputBox: { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14 },
   sheetInputText: { fontSize: 14, fontFamily: FontFamily.body, color: T.textPri, paddingVertical: 13 },
   sheetHint: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, lineHeight: 16, marginBottom: 14 },
 
+  devHintBox: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(232,182,86,0.1)', borderWidth: 1, borderColor: 'rgba(232,182,86,0.24)', borderRadius: 10, paddingHorizontal: 11, paddingVertical: 9, marginBottom: 14 },
+  devHintText: { fontSize: 11.5, fontFamily: FontFamily.bodyMedium, color: T.gold },
+
   sheetPrimaryBtn: { height: 50, borderRadius: 15, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
   sheetPrimaryBtnText: { fontSize: 14, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 0.2 },
+
+  menuRow: { flexDirection: 'row', alignItems: 'center', gap: 13, paddingVertical: 13 },
+  menuIconShell: { width: 38, height: 38, borderRadius: 12, backgroundColor: 'rgba(124,138,255,0.12)', justifyContent: 'center', alignItems: 'center' },
+  menuLabel: { fontSize: 14, fontFamily: FontFamily.heading, color: T.textPri },
+  menuSublabel: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
 });
 </file>
 
@@ -4208,7 +4130,7 @@ const styles = StyleSheet.create({
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, FlatList,
-  TouchableOpacity, Dimensions, TextInput,
+  TouchableOpacity, TextInput,
   KeyboardAvoidingView, Platform, Keyboard,
   TouchableWithoutFeedback, Alert, ActivityIndicator,
   ListRenderItemInfo,
@@ -4221,6 +4143,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useMarketSocket } from '../../hooks/useMarketSocket';
@@ -4229,13 +4152,9 @@ import { useWalletStore } from '../../stores/walletStore';
 import { useMyOrders, useMyTrades, usePlaceOrder, useCancelOrder, useOrderBook, OrderBook } from '../../hooks/useOrders';
 import { useOrderStore, Trade as TradeFill, TradeRole } from '../../stores/orderStore';
 
-// ─── Blur fallback ────────────────────────────────────────────────────────────
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch { BlurView = null; }
 
-const { width } = Dimensions.get('window');
-
-// ─── Design tokens (identical to Home) ───────────────────────────────────────
 const T = {
   bg0: '#06070A',
   glass: 'rgba(255,255,255,0.04)',
@@ -4256,9 +4175,6 @@ const T = {
   textTer: '#60657A',
 };
 
-// ─── Tradeable pairs (matches backend + SYMBOL_META) ─────────────────────────
-// Deduped once at module scope, instead of filtering on every render.
-// (Previous list had a duplicate SOLUSDT entry — removed here.)
 const PAIRS: Array<{ symbol: string; base: string; quote: string; color: string }> = [
   { symbol: 'BTCUSDT',  base: 'BTC',  quote: 'USDT', color: '#F7931A' },
   { symbol: 'ETHUSDT',  base: 'ETH',  quote: 'USDT', color: '#8FA3FF' },
@@ -4291,12 +4207,6 @@ interface Order {
   createdAt: string;
 }
 
-// Wallet balances are now sourced from stores/walletStore (WalletBalance is defined there).
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-// memo: GlassPanel is purely presentational; without memo it re-renders (and
-// re-touches its native BlurView) every time its parent re-renders, which
-// happened very often before the Zustand-selector fixes below.
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (BlurView) {
     return (
@@ -4310,8 +4220,6 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
-// memo: only depends on `color`; its animation is fully self-contained via
-// shared values, so parent re-renders shouldn't touch it at all.
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
@@ -4328,9 +4236,6 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   );
 });
 
-// ─── Price ticker (flashing on update) ───────────────────────────────────────
-// Zustand fix: select only this symbol's price instead of the whole store,
-// so a tick for another pair never re-renders this component.
 function LivePriceTicker({ symbol, color }: { symbol: string; color: string }) {
   const price = useMarketStore((s) => s.prices[symbol]?.price ?? 0);
   const flash = useSharedValue(0);
@@ -4362,11 +4267,6 @@ function LivePriceTicker({ symbol, color }: { symbol: string; color: string }) {
   );
 }
 
-// ─── Pair selector pill ───────────────────────────────────────────────────────
-// Zustand fix: only subscribes to this pair's own price, and only actually
-// needs it when selected (unselected pills don't render a price at all).
-// memo fix: custom comparator ignores onSelect's identity (a new closure is
-// created each render in the parent) so the memo isn't defeated by that.
 function PairPillBase({ pair, selected, onSelect }: { pair: typeof PAIRS[0]; selected: boolean; onSelect: () => void }) {
   const scale = useSharedValue(1);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -4403,12 +4303,6 @@ const PairPill = memo(PairPillBase, (prev, next) =>
   prev.pair.symbol === next.pair.symbol && prev.selected === next.selected
 );
 
-// ─── Order book ───────────────────────────────────────────────────────────────
-// Real depth: `book` comes from GET /orders/orderbook/:asset (see
-// hooks/useOrders.ts), which aggregates actual resting PENDING/PARTIAL
-// orders in Postgres — the same orders the matching-engine works through
-// in Redis. Bar widths are scaled against the largest level currently on
-// screen, not random.
 function MiniOrderBook({
   book, loading, currentPrice,
 }: {
@@ -4419,8 +4313,6 @@ function MiniOrderBook({
   const bids = book?.bids ?? [];
   const asks = book?.asks ?? [];
 
-  // Reverse asks so the best (lowest) ask sits directly above the spread
-  // row, worst asks at the top — bids already arrive best-first from the API.
   const displayAsks = useMemo(() => [...asks].reverse(), [asks]);
 
   const maxAmount = useMemo(() => {
@@ -4483,11 +4375,6 @@ function MiniOrderBook({
   );
 }
 
-// ─── Order row ────────────────────────────────────────────────────────────────
-// memo: `order` objects are stable between renders unless orders are
-// re-fetched, so this only needs to re-render when its own order changes.
-// `onCancel` / `cancelling` let the parent own the DELETE /orders/:orderId
-// mutation (via useCancelOrder) while this component stays presentational.
 const OrderRow = memo(function OrderRow({
   order, index, onCancel, cancelling,
 }: {
@@ -4505,7 +4392,7 @@ const OrderRow = memo(function OrderRow({
   const sideColor = order.side === 'BUY' ? T.gain : T.loss;
   const price = parseFloat(order.price);
   const amount = parseFloat(order.amount);
-  const isCancellable = order.status === 'PENDING' || order.status === 'PARTIAL';
+  const isCancellable = (order.status === 'PENDING' || order.status === 'PARTIAL') && Number(order.amount) > 0;
   const isMarket = order.type === 'MARKET';
 
   return (
@@ -4528,7 +4415,7 @@ const OrderRow = memo(function OrderRow({
       </View>
       <View style={{ alignItems: 'flex-end' }}>
         <View style={[styles.statusBadge, { backgroundColor: statusColor[order.status] + '18' }]}>
-          <Text style={[styles.statusText, { color: statusColor[order.status] }]}>{order.status}</Text>
+          <Text style={[styles.orderStatusText, { color: statusColor[order.status] }]}>{order.status}</Text>
         </View>
         <Text style={styles.orderTime}>
           {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -4552,9 +4439,6 @@ const OrderRow = memo(function OrderRow({
   );
 });
 
-// ─── Trade (fill) row ─────────────────────────────────────────────────────────
-// memo: same rationale as OrderRow — trade objects are stable between
-// GET /orders/my-trades refetches.
 const TradeRow = memo(function TradeRow({ trade, index }: { trade: TradeFill; index: number }) {
   const roleColor: Record<TradeRole, string> = { MAKER: T.accent, TAKER: T.gold };
   const sideColor = trade.side === 'BUY' ? T.gain : T.loss;
@@ -4584,9 +4468,6 @@ const TradeRow = memo(function TradeRow({ trade, index }: { trade: TradeFill; in
   );
 });
 
-// ─── Ambient background ───────────────────────────────────────────────────────
-// memo: takes no props at all, so it should never re-render due to Trade's
-// state changes — only its own internal shared-value animation should run.
 const AmbientField = memo(function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
@@ -4612,13 +4493,11 @@ const AmbientField = memo(function AmbientField() {
   );
 });
 
-// ─── Main Trade Screen ────────────────────────────────────────────────────────
 export default function Trade() {
   const insets = useSafeAreaInsets();
 
   useMarketSocket();
 
-  // ── State ──────────────────────────────────────────────────────────────────
   const [selectedPair, setSelectedPair] = useState(PAIRS[0]);
   const [side, setSide] = useState<OrderSide>('BUY');
   const [orderKind, setOrderKind] = useState<OrderKind>('LIMIT');
@@ -4627,13 +4506,17 @@ export default function Trade() {
   const [activeTab, setActiveTab] = useState<'trade' | 'orders' | 'trades'>('trade');
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
-  // GET /orders/orderbook/:asset — real resting-order depth for the
-  // selected pair. Also doubles as the source for MARKET order pricing.
+  const scrollRef = useRef<ScrollView>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+      setActiveTab('trade');
+    }, [])
+  );
+
   const { data: orderBook, isLoading: loadingBook } = useOrderBook(selectedPair.symbol);
 
-  // ── Wallet & orders, via the shared hooks/stores (same ones the Wallet
-  // screen uses) instead of ad-hoc fetch() calls with a manually attached
-  // token — the `api` client already injects auth from authStore.
   const { refetch: refetchWallet } = useWallet();
   const walletBalances = useWalletStore((s) => s.balances);
 
@@ -4646,8 +4529,6 @@ export default function Trade() {
   const placeOrder = usePlaceOrder();
   const submitting = placeOrder.isPending;
 
-  // DELETE /orders/:orderId — tracked per-order so only the row being
-  // cancelled shows a spinner, not the whole list.
   const cancelOrder = useCancelOrder();
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const handleCancelOrder = useCallback((orderId: string) => {
@@ -4660,44 +4541,47 @@ export default function Trade() {
     });
   }, [cancelOrder]);
 
-  // Selected pair's live price and connection flag, each scoped narrowly.
   const selectedLivePrice = useMarketStore((s) => s.prices[selectedPair.symbol]?.price ?? 0);
   const connected = useMarketStore((s) => s.connected);
+  const restingLimitPrice = useMemo(() => {
+    if (!orderBook) return 0;
+    return side === 'BUY'
+      ? orderBook.bids[0]?.price ?? 0
+      : orderBook.asks[0]?.price ?? 0;
+  }, [orderBook, side]);
 
-  // Auto-fill price input with the live price exactly once per pair
-  // selection, instead of re-checking (and mostly no-op'ing) on every tick.
   const hasAutoFilledRef = useRef(false);
 
   useEffect(() => {
     hasAutoFilledRef.current = false;
     setPriceInput('');
-  }, [selectedPair.symbol]);
+  }, [selectedPair.symbol, side]);
 
   useEffect(() => {
-    if (selectedLivePrice > 0 && !hasAutoFilledRef.current) {
+    if (orderKind !== 'LIMIT' || hasAutoFilledRef.current) return;
+
+    const defaultPrice = restingLimitPrice > 0 ? restingLimitPrice : selectedLivePrice;
+
+    if (defaultPrice > 0) {
       setPriceInput(
-        selectedLivePrice >= 1000
-          ? selectedLivePrice.toFixed(2)
-          : selectedLivePrice >= 1 ? selectedLivePrice.toFixed(4) : selectedLivePrice.toFixed(6)
+        defaultPrice >= 1000
+          ? defaultPrice.toFixed(2)
+          : defaultPrice >= 1 ? defaultPrice.toFixed(4) : defaultPrice.toFixed(6)
       );
       hasAutoFilledRef.current = true;
     }
-  }, [selectedLivePrice]);
+  }, [orderKind, restingLimitPrice, selectedLivePrice]);
 
   const fetchWallet = useCallback(() => { refetchWallet(); }, [refetchWallet]);
   const fetchOrders = useCallback(() => { refetchOrders(); }, [refetchOrders]);
   const fetchTrades = useCallback(() => { refetchTrades(); }, [refetchTrades]);
 
-  // For MARKET orders the "price" isn't user-entered — it's the best
-  // available price on the opposite side of the book (what a market order
-  // would actually cross at).
   const marketRefPrice = useMemo(() => {
     if (!orderBook) return 0;
     const level = side === 'BUY' ? orderBook.asks[0] : orderBook.bids[0];
     return level?.price ?? 0;
   }, [orderBook, side]);
 
-  // ── Computed ───────────────────────────────────────────────────────────────
   const totalValue = useMemo(() => {
     const p = orderKind === 'MARKET' ? marketRefPrice : (parseFloat(priceInput) || 0);
     const a = parseFloat(amountInput) || 0;
@@ -4719,17 +4603,6 @@ export default function Trade() {
     }
   }, [orderKind, marketRefPrice, priceInput, selectedLivePrice, side, usdtBalance, baseBalance]);
 
-  // ── Submit order → POST /api/orders/place ──────────────────────────────────
-  // MARKET orders: the matching-engine only understands a numeric price
-  // (it matches BUY if price >= bestAsk, SELL if price <= bestBid — see
-  // matching-engine/matchingService.ts), it has no separate "market" mode.
-  // So a market order here is a LIMIT order priced aggressively enough to
-  // cross the current best opposite price, with a small slippage buffer
-  // (2%) so it can walk a couple of price levels instead of stopping dead
-  // at the very first one. `type: 'MARKET'` is still sent and stored so
-  // order history correctly shows what the user actually asked for.
-  const MARKET_SLIPPAGE = 0.02;
-
   const handlePlaceOrder = useCallback(async () => {
     const amount = parseFloat(amountInput);
 
@@ -4745,9 +4618,7 @@ export default function Trade() {
         Alert.alert('No Liquidity', `There are no resting ${side === 'BUY' ? 'sell' : 'buy'} orders to match against right now.`);
         return;
       }
-      executionPrice = side === 'BUY'
-        ? marketRefPrice * (1 + MARKET_SLIPPAGE)
-        : marketRefPrice * (1 - MARKET_SLIPPAGE);
+      executionPrice = marketRefPrice;
     } else {
       const price = parseFloat(priceInput);
       if (!price || price <= 0) {
@@ -4777,7 +4648,6 @@ export default function Trade() {
     setSelectedPair(pair);
   }, []);
 
-  // ── Button animations ──────────────────────────────────────────────────────
   const btnScale = useSharedValue(1);
   const btnStyle = useAnimatedStyle(() => ({ transform: [{ scale: btnScale.value }] }));
 
@@ -4789,16 +4659,21 @@ export default function Trade() {
   }, [submitSuccess]);
   const successStyle = useAnimatedStyle(() => ({ opacity: successOpacity.value }));
 
-  // ── Side toggle ────────────────────────────────────────────────────────────
   const sideOffset = useSharedValue(0);
   useEffect(() => {
     sideOffset.value = withSpring(side === 'BUY' ? 0 : 1, { damping: 18 });
   }, [side]);
-  const sideIndicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(sideOffset.value, [0, 1], [0, (width - 36) / 2 - 4]) }],
-  }));
 
-  // ── Orders list rendering (FlatList) ──────────────────────────────────────
+  const [toggleWidth, setToggleWidth] = useState(0);
+  const indicatorWidth = toggleWidth > 0 ? (toggleWidth - 8) / 2 : 0;
+  const handleToggleLayout = useCallback((e: any) => {
+    setToggleWidth(e.nativeEvent.layout.width);
+  }, []);
+
+  const sideIndicatorStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(sideOffset.value, [0, 1], [0, indicatorWidth]) }],
+  }), [indicatorWidth]);
+
   const renderOrderItem = useCallback(({ item, index }: ListRenderItemInfo<Order>) => (
     <OrderRow
       order={item}
@@ -4834,7 +4709,6 @@ export default function Trade() {
     )
   ), [loadingOrders]);
 
-  // ── Trades (fills) list rendering — GET /orders/my-trades ──────────────────
   const renderTradeItem = useCallback(({ item, index }: ListRenderItemInfo<TradeFill>) => (
     <TradeRow trade={item} index={index} />
   ), []);
@@ -4871,13 +4745,13 @@ export default function Trade() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <ScrollView
+            ref={scrollRef}
             contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 120 }]}
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
           >
-            {/* ── Header ──────────────────────────────────────── */}
-            <Animated.View entering={FadeIn.delay(40).duration(400)} style={styles.topBar}>
+                        <Animated.View entering={FadeIn.delay(40).duration(400)} style={styles.topBar}>
               <View>
                 <Text style={styles.screenLabel}>Trading Terminal</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
@@ -4895,8 +4769,7 @@ export default function Trade() {
               </View>
             </Animated.View>
 
-            {/* ── Pair Selector ────────────────────────────────── */}
-            <Animated.View entering={FadeInDown.delay(60).springify().damping(18)}>
+                        <Animated.View entering={FadeInDown.delay(60).springify().damping(18)}>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -4913,8 +4786,7 @@ export default function Trade() {
               </ScrollView>
             </Animated.View>
 
-            {/* ── Wallet balances ──────────────────────────────── */}
-            <Animated.View entering={FadeInDown.delay(90).springify().damping(16)} style={styles.walletStrip}>
+                        <Animated.View entering={FadeInDown.delay(90).springify().damping(16)} style={styles.walletStrip}>
               <GlassPanel style={styles.walletPanel}>
                 <LinearGradient
                   colors={['rgba(255,255,255,0.04)', 'transparent']}
@@ -4943,8 +4815,7 @@ export default function Trade() {
               </GlassPanel>
             </Animated.View>
 
-            {/* ── Tab bar: Trade / Orders / Trades ─────────────── */}
-            <Animated.View entering={FadeInDown.delay(110).springify().damping(16)} style={styles.tabBarWrap}>
+                        <Animated.View entering={FadeInDown.delay(110).springify().damping(16)} style={styles.tabBarWrap}>
               <GlassPanel style={styles.tabBar}>
                 <View style={styles.tabsGroup}>
                   {(['trade', 'orders', 'trades'] as const).map((t) => (
@@ -4973,18 +4844,8 @@ export default function Trade() {
               </GlassPanel>
             </Animated.View>
 
-            {/*
-              Tab content fix: both branches stay mounted at all times and are
-              toggled with `display: none` instead of being conditionally
-              rendered. Conditional rendering previously destroyed and rebuilt
-              the entire "trade" subtree (including native BlurView instances,
-              which are expensive to initialize) on every tab switch — that
-              mount/unmount churn was the actual cause of tab-switch lag.
-              With display:none, switching tabs is just a cheap visibility flip.
-            */}
-            <View style={activeTab === 'trade' ? undefined : styles.hidden}>
-              {/* ── Order form ────────────────────────────────── */}
-              <Animated.View entering={FadeInDown.delay(130).springify().damping(16)} style={styles.formCard}>
+                        <View style={activeTab === 'trade' ? undefined : styles.hidden}>
+                            <Animated.View entering={FadeInDown.delay(130).springify().damping(16)} style={styles.formCard}>
                 <GlassPanel style={styles.formPanel}>
                   <LinearGradient
                     colors={['rgba(255,255,255,0.10)', 'rgba(255,255,255,0)']}
@@ -4998,10 +4859,9 @@ export default function Trade() {
                   />
                   <View style={styles.formInnerBorder} pointerEvents="none" />
 
-                  {/* BUY / SELL toggle */}
-                  <View style={styles.sideToggleWrap}>
+                                    <View style={styles.sideToggleWrap} onLayout={handleToggleLayout}>
                     <Animated.View style={[styles.sideIndicator, {
-                      width: (width - 36) / 2 - 4,
+                      width: indicatorWidth,
                       backgroundColor: side === 'BUY' ? T.gain + '22' : T.loss + '22',
                       borderColor: side === 'BUY' ? T.gain + '50' : T.loss + '50',
                     }, sideIndicatorStyle]} />
@@ -5013,8 +4873,7 @@ export default function Trade() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* LIMIT / MARKET order-kind toggle */}
-                  <View style={styles.kindRow}>
+                                    <View style={styles.kindRow}>
                     {(['LIMIT', 'MARKET'] as const).map((k) => (
                       <TouchableOpacity
                         key={k}
@@ -5026,9 +4885,7 @@ export default function Trade() {
                     ))}
                   </View>
 
-                  {/* Price input — editable for LIMIT, a live read-only
-                      estimate for MARKET (computed from the real order book) */}
-                  <View style={styles.inputGroup}>
+                                    <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>
                       {orderKind === 'LIMIT' ? 'Limit Price (USDT)' : 'Est. Execution Price (USDT)'}
                     </Text>
@@ -5065,8 +4922,7 @@ export default function Trade() {
                     )}
                   </View>
 
-                  {/* Amount input */}
-                  <View style={styles.inputGroup}>
+                                    <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>Amount ({selectedPair.base})</Text>
                     <View style={styles.inputRow}>
                       <TextInput
@@ -5081,8 +4937,7 @@ export default function Trade() {
                     </View>
                   </View>
 
-                  {/* Quick % buttons */}
-                  <View style={styles.pctRow}>
+                                    <View style={styles.pctRow}>
                     {quickAmountPcts.map((pct) => (
                       <TouchableOpacity key={pct} style={styles.pctBtn} onPress={() => handleQuickPct(pct)}>
                         <Text style={styles.pctBtnText}>{Math.round(pct * 100)}%</Text>
@@ -5090,8 +4945,7 @@ export default function Trade() {
                     ))}
                   </View>
 
-                  {/* Total */}
-                  <View style={styles.totalRow}>
+                                    <View style={styles.totalRow}>
                     <Text style={styles.totalLabel}>Total</Text>
                     <Text style={[styles.totalValue, { color: side === 'BUY' ? T.gain : T.loss }]}>
                       ≈ ${totalValue} USDT
@@ -5100,8 +4954,7 @@ export default function Trade() {
 
                   <View style={styles.formDivider} />
 
-                  {/* Submit button */}
-                  <Animated.View style={btnStyle}>
+                                    <Animated.View style={btnStyle}>
                     <TouchableOpacity
                       activeOpacity={0.9}
                       onPressIn={() => { btnScale.value = withSpring(0.97, { damping: 14 }); }}
@@ -5133,8 +4986,7 @@ export default function Trade() {
                     </TouchableOpacity>
                   </Animated.View>
 
-                  {/* Success flash */}
-                  <Animated.View style={[styles.successOverlay, successStyle]} pointerEvents="none">
+                                    <Animated.View style={[styles.successOverlay, successStyle]} pointerEvents="none">
                     <LinearGradient
                       colors={[T.gain + '22', 'transparent']}
                       style={StyleSheet.absoluteFill}
@@ -5143,8 +4995,7 @@ export default function Trade() {
                 </GlassPanel>
               </Animated.View>
 
-              {/* ── Order book ────────────────────────────────── */}
-              <Animated.View entering={FadeInDown.delay(160).springify().damping(16)} style={styles.obCard}>
+                            <Animated.View entering={FadeInDown.delay(160).springify().damping(16)} style={styles.obCard}>
                 <GlassPanel style={styles.obPanel}>
                   <LinearGradient
                     colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
@@ -5198,7 +5049,6 @@ export default function Trade() {
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
@@ -5217,7 +5067,6 @@ const styles = StyleSheet.create({
   },
   statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.2 },
 
-  // Pair selector
   pairScroll: { paddingBottom: 14, gap: 7 },
   pairPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -5230,7 +5079,6 @@ const styles = StyleSheet.create({
   pairPillText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textTer },
   pairPillPrice: { fontSize: 11, fontFamily: FontFamily.body, marginLeft: 2 },
 
-  // Wallet strip
   walletStrip: { marginBottom: 12, borderRadius: 18, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 } },
   walletPanel: { borderRadius: 18, borderWidth: 1, borderColor: T.glassBorder, overflow: 'hidden' },
   walletRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16 },
@@ -5241,7 +5089,6 @@ const styles = StyleSheet.create({
   walletRefresh: { paddingHorizontal: 8, paddingVertical: 4 },
   walletRefreshIcon: { fontSize: 18, color: T.textTer },
 
-  // Tab bar
   tabBarWrap: { marginBottom: 14, borderRadius: 18, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 } },
   tabBar: { borderRadius: 18, borderWidth: 1, borderColor: T.glassBorder, padding: 4 },
   tabsGroup: { flexDirection: 'row', gap: 4 },
@@ -5249,12 +5096,10 @@ const styles = StyleSheet.create({
   tabBtnActive: {},
   tabBtnText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textTer, letterSpacing: 0.2 },
 
-  // Form card
   formCard: { marginBottom: 14, borderRadius: 24, shadowColor: T.accentDeep, shadowOpacity: 0.24, shadowRadius: 28, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
   formPanel: { borderRadius: 24, borderWidth: 1, borderColor: T.glassBorderHi, padding: 18 },
   formInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 23, borderTopRightRadius: 23 },
 
-  // BUY/SELL toggle
   sideToggleWrap: {
     flexDirection: 'row', position: 'relative',
     backgroundColor: 'rgba(255,255,255,0.03)',
@@ -5268,7 +5113,6 @@ const styles = StyleSheet.create({
   sideBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', zIndex: 1 },
   sideBtnText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textTer, letterSpacing: 0.3 },
 
-  // LIMIT / MARKET kind toggle
   kindRow: { flexDirection: 'row', gap: 6, marginBottom: 16 },
   kindBtn: {
     flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center',
@@ -5278,7 +5122,6 @@ const styles = StyleSheet.create({
   kindBtnText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.textTer, letterSpacing: 0.6 },
   kindBtnTextActive: { color: T.accent },
 
-  // Inputs
   inputGroup: { marginBottom: 14 },
   inputLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7, marginBottom: 7 },
   inputRow: {
@@ -5300,7 +5143,6 @@ const styles = StyleSheet.create({
   },
   inputSuffixText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 0.5 },
 
-  // Quick pct
   pctRow: { flexDirection: 'row', gap: 6, marginBottom: 18 },
   pctBtn: {
     flex: 1, paddingVertical: 7, borderRadius: 9,
@@ -5309,7 +5151,6 @@ const styles = StyleSheet.create({
   },
   pctBtnText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.textSec },
 
-  // Total
   totalRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     marginBottom: 16,
@@ -5319,13 +5160,11 @@ const styles = StyleSheet.create({
 
   formDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 16 },
 
-  // Submit
   submitBtnWrap: { borderRadius: 16, overflow: 'hidden' },
   submitBtn: { paddingVertical: 15, alignItems: 'center', borderRadius: 16 },
   submitBtnText: { fontSize: 15, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 0.3 },
   successOverlay: { ...StyleSheet.absoluteFillObject, borderRadius: 24 },
 
-  // Order book
   obCard: { marginBottom: 14, borderRadius: 20, shadowColor: T.violet, shadowOpacity: 0.14, shadowRadius: 22, shadowOffset: { width: 0, height: 10 } },
   obPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorderHi, padding: 16 },
   obInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 19, borderTopRightRadius: 19 },
@@ -5358,7 +5197,6 @@ const styles = StyleSheet.create({
   obEmptyText: { fontSize: 12.5, fontFamily: FontFamily.heading, color: T.textSec },
   obEmptySubText: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer },
 
-  // My Orders
   ordersHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   ordersTitle: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, flex: 1 },
   refreshBtn: {
@@ -5384,7 +5222,7 @@ const styles = StyleSheet.create({
   },
   orderTypeBadgeText: { fontSize: 8, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 0.4 },
   statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginBottom: 3 },
-  statusTextt: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
+  orderStatusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
   orderTime: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer },
   cancelBtn: {
     marginLeft: 10, width: 26, height: 26, borderRadius: 13,
@@ -5393,7 +5231,6 @@ const styles = StyleSheet.create({
   },
   cancelBtnText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.loss },
 
-  // States
   loadingState: { paddingVertical: 40, alignItems: 'center', gap: 12 },
   loadingText: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
   emptyState: { paddingVertical: 60, alignItems: 'center', gap: 8 },
@@ -5404,13 +5241,14 @@ const styles = StyleSheet.create({
 </file>
 
 <file path="app/(tabs)/wallet.tsx">
-import { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
   TouchableOpacity, Dimensions, RefreshControl,
-  Modal, TextInput, KeyboardAvoidingView, Platform,
-  Alert, ActivityIndicator,
+  Modal, TextInput, Platform,
+  Alert, ActivityIndicator, Keyboard, TouchableWithoutFeedback,
 } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import Animated, {
   FadeIn, FadeInDown,
   useSharedValue, useAnimatedStyle,
@@ -5419,9 +5257,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { FontFamily } from '../../constants/typography';
 import { useWallet } from '../../hooks/useWallet';
-import { useWalletStore } from '../../stores/walletStore';
+import { useTransferFunds, useWalletTransfers, type WalletTransferRecord } from '../../hooks/useWallet';
+import { useWalletStore, PRICE_MAP } from '../../stores/walletStore';
+import { useMarketStore } from '../../stores/marketStore';
 import {
   useFundingHistory,
   useCreateDepositIntent,
@@ -5430,37 +5271,32 @@ import {
 } from '../../hooks/useFunding';
 import { useFundingStore } from '../../stores/fundingStore';
 
-// [P6] Evaluated once — avoids conditional require() inside render
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
 const HAS_BLUR = BlurView !== null;
 
 const { width } = Dimensions.get('window');
 
-// ─── Design tokens (unchanged) ────────────────────────────────────────────────
 const T = {
   bg0: '#06070A',
-  bg1: '#0A0C11',
-  glass: 'rgba(255,255,255,0.035)',
-  glassUp: 'rgba(255,255,255,0.055)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  glassBorderHi: 'rgba(255,255,255,0.14)',
-  hairline: 'rgba(255,255,255,0.06)',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
   accent: '#7C8AFF',
   accentDeep: '#5B63E8',
   violet: '#B583FF',
-  cyan: '#5EE7E7',
   gain: '#3DDC97',
-  gainDim: 'rgba(61,220,151,0.10)',
+  gainDim: 'rgba(61,220,151,0.12)',
   loss: '#FF6B7A',
-  lossDim: 'rgba(255,107,122,0.10)',
+  lossDim: 'rgba(255,107,122,0.12)',
   gold: '#E8B656',
-  textPri: '#F4F5F7',
-  textSec: '#9499A8',
-  textTer: '#5B6072',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
 };
 
-// ─── Asset metadata (unchanged) ───────────────────────────────────────────────
 const ASSET_META: Record<string, { name: string; color: string; symbol: string }> = {
   USDT:  { name: 'Tether',    color: '#26A17B', symbol: '$' },
   BTC:   { name: 'Bitcoin',   color: '#F7931A', symbol: '₿' },
@@ -5473,27 +5309,61 @@ const ASSET_META: Record<string, { name: string; color: string; symbol: string }
   AVAX:  { name: 'Avalanche', color: '#F06A6E', symbol: 'A' },
 };
 
-// [P7] Module-level static constants — never reallocated
 const FIAT_ASSETS = new Set(['USDT', 'USDC']);
 const MODAL_ASSETS = ['USDT', 'BTC', 'ETH', 'BNB', 'SOL'] as const;
+const CRYPTO_ASSETS = ['BTC', 'ETH', 'BNB', 'SOL'] as const;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 type HistoryItem = {
   id: string;
-  type: 'DEPOSIT' | 'WITHDRAW';
+  kind: 'DEPOSIT' | 'WITHDRAW' | 'TRANSFER';
+  flow?: 'IN' | 'OUT';
+  title: string;
   asset: string;
   amount: string;
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  createdAt: string;
   time: string;
 };
 
-// ─── [P1] GlassPanel — memo, HAS_BLUR checked at module level ─────────────────
+type DepositIntentTransaction = {
+  id: string;
+  status: string;
+  type: string;
+  amount: string;
+  asset: string;
+  stripeCheckoutUrl: string | null;
+  cryptoDepositAddress: string | null;
+};
+
+function useKeyboardOffset() {
+  const keyboardHeight = useSharedValue(0);
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      keyboardHeight.value = withTiming(e.endCoordinates?.height ?? 0, { duration: 220 });
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => {
+      keyboardHeight.value = withTiming(0, { duration: 220 });
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  return keyboardHeight;
+}
+
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }: any) {
   if (HAS_BLUR) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
         <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(13,15,20,0.45)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -5505,7 +5375,18 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   );
 });
 
-// ─── [P1] PulseDot — memo: color prop never changes after mount ───────────────
+const SheetSurface = memo(function SheetSurface({ style, children, tint }: { style?: any; children: any; tint?: [string, string] }) {
+  return (
+    <View style={[style, styles.sheetSolid, { overflow: 'hidden' }]}>
+      <LinearGradient
+        colors={tint ?? ['rgba(124,138,255,0.12)', 'transparent']}
+        style={StyleSheet.absoluteFill}
+      />
+      {children}
+    </View>
+  );
+});
+
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
@@ -5522,11 +5403,9 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   );
 });
 
-// ─── [P1] AmbientField — memo: pure decoration, never needs to re-render ──────
 const AmbientField = memo(function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
-    // [C5] Easing.sine is the correct API (not Easing.sin)
     drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
   }, []);
   const orb1 = useAnimatedStyle(() => ({
@@ -5549,18 +5428,19 @@ const AmbientField = memo(function AmbientField() {
   );
 });
 
-// ─── [B3] FundingModal — wired to real backend endpoints ──────────────────────
+type DepositKind = 'FIAT' | 'CRYPTO';
+
 function FundingModal({ visible, mode, onClose, onSuccess }: {
   visible: boolean;
   mode: 'deposit' | 'withdraw';
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [asset, setAsset] = useState<typeof MODAL_ASSETS[number]>('USDT');
+  const [kind, setKind] = useState<DepositKind | null>(null);
+  const [asset, setAsset] = useState<typeof MODAL_ASSETS[number]>('BTC');
   const [amount, setAmount] = useState('');
+  const [pendingDeposit, setPendingDeposit] = useState<DepositIntentTransaction | null>(null);
 
-  // [B3,B5] Real API calls to the funding service through the gateway,
-  // via React Query mutations (see hooks/useFunding.ts).
   const createDepositIntent = useCreateDepositIntent();
   const simulateCryptoDeposit = useSimulateCryptoDeposit();
   const createWithdrawalIntent = useCreateWithdrawalIntent();
@@ -5571,6 +5451,7 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
 
   const translateY = useSharedValue(600);
   const backdropOp = useSharedValue(0);
+  const keyboardHeight = useKeyboardOffset();
 
   useEffect(() => {
     if (visible) {
@@ -5579,167 +5460,521 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
     } else {
       backdropOp.value = withTiming(0, { duration: 220 });
       translateY.value = withTiming(600, { duration: 260 });
+      setKind(null);
+      setPendingDeposit(null);
+      setAmount('');
     }
   }, [visible]);
 
-  const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: translateY.value }] }));
+  const sheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value - keyboardHeight.value }],
+  }));
   const backdropStyle = useAnimatedStyle(() => ({ opacity: backdropOp.value }));
 
-  // [B3,B5] Real API calls to the funding service through the gateway.
-  // Deposits go through a two-step flow on the backend: an intent is
-  // created first (POST /funding/deposit/intent); for on-chain assets we
-  // then immediately simulate the confirmation (POST
-  // /funding/deposit/simulate-crypto) since there's no real chain watcher
-  // in this environment. FIAT_STRIPE intents settle via the Stripe
-  // webhook instead, so no follow-up call is needed there.
+  const dismissModal = useCallback(() => {
+    Keyboard.dismiss();
+    setKind(null);
+    setPendingDeposit(null);
+    setAmount('');
+    onClose();
+  }, [onClose]);
+
+  const selectKind = useCallback((next: DepositKind) => {
+    setKind(next);
+    setAsset(next === 'FIAT' ? 'USDT' : 'BTC');
+  }, []);
+
+  const goBackToMethod = useCallback(() => {
+    setKind(null);
+    setAmount('');
+  }, []);
+
+  const openCheckout = useCallback(async () => {
+    if (!pendingDeposit?.stripeCheckoutUrl) {
+      Alert.alert('Checkout unavailable', 'No checkout URL was returned for this deposit.');
+      return;
+    }
+
+    try {
+      await WebBrowser.openBrowserAsync(pendingDeposit.stripeCheckoutUrl);
+    } catch (err) {
+      console.error('Failed to open checkout:', err);
+      Alert.alert('Unable to open checkout', 'Please try again from the deposit history.');
+    }
+  }, [pendingDeposit]);
+
+  const confirmCryptoDeposit = useCallback(async () => {
+    if (!pendingDeposit) return;
+
+    try {
+      await simulateCryptoDeposit.mutateAsync(pendingDeposit.id);
+      Alert.alert('Deposit completed', 'Your wallet balance has been updated.');
+      setPendingDeposit(null);
+      setAmount('');
+      onSuccess();
+      onClose();
+    } catch (err: any) {
+      Alert.alert('Confirmation failed', err.response?.data?.error || 'Something went wrong');
+    }
+  }, [pendingDeposit, simulateCryptoDeposit, onSuccess, onClose]);
+
   const handleSubmit = async () => {
+    Keyboard.dismiss();
     const parsed = parseFloat(amount);
     if (!amount || isNaN(parsed) || parsed <= 0) {
       Alert.alert('Invalid Amount', 'Please enter a valid amount.');
       return;
     }
 
-    // [B5] type field: stablecoins are fiat on-ramp, everything else is on-chain
     const type = FIAT_ASSETS.has(asset) ? 'FIAT_STRIPE' : 'CRYPTO_ETH';
 
     try {
       if (mode === 'deposit') {
         const { transaction } = await createDepositIntent.mutateAsync({ asset, amount, type });
-        if (type === 'CRYPTO_ETH') {
-          await simulateCryptoDeposit.mutateAsync(transaction.id);
+        setPendingDeposit(transaction);
+
+        if (transaction.type === 'FIAT_STRIPE' && transaction.stripeCheckoutUrl) {
+          await WebBrowser.openBrowserAsync(transaction.stripeCheckoutUrl);
         }
-        Alert.alert('Success', 'Deposit request submitted.');
+        Alert.alert(
+          'Deposit intent created',
+          transaction.type === 'FIAT_STRIPE'
+            ? 'Complete checkout to finalize the deposit.'
+            : 'Send the funds to the displayed address, then confirm from this screen.'
+        );
       } else {
         await createWithdrawalIntent.mutateAsync({
           asset,
           amount,
           type,
-          // Mock destination for the on-chain path; a real UI would collect this.
           destinationAddress: type === 'CRYPTO_ETH' ? '0xUserProvidedDestinationAddress' : undefined,
         });
         Alert.alert('Success', 'Withdrawal request submitted.');
       }
-      setAmount('');
-      onSuccess();  // trigger a balance refetch
-      onClose();
+      if (mode === 'withdraw') {
+        setAmount('');
+        onSuccess();
+        onClose();
+      }
     } catch (err: any) {
       Alert.alert('Failed', err.response?.data?.error || 'Something went wrong');
     }
   };
 
   const meta = ASSET_META[asset];
+  const showDepositDetails = mode === 'deposit' && pendingDeposit !== null;
+  const showMethodStep = kind === null;
+  const tint: [string, string] = mode === 'deposit'
+    ? [T.gain + '14', 'transparent']
+    : [T.loss + '14', 'transparent'];
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <View style={{ flex: 1 }}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} />
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={dismissModal} />
         </Animated.View>
 
         <Animated.View style={[styles.sheet, sheetStyle]}>
-          <GlassPanel style={styles.sheetPanel} intensity={40}>
-            <LinearGradient
-              colors={[mode === 'deposit' ? T.gain + '12' : T.loss + '12', 'transparent']}
-              style={StyleSheet.absoluteFill}
-            />
-
-            <View style={styles.sheetHandle} />
-
-            <View style={styles.sheetHeader}>
-              <View style={[styles.sheetIconWrap, {
-                backgroundColor: mode === 'deposit' ? T.gainDim : T.lossDim,
-                borderColor: mode === 'deposit' ? T.gain + '40' : T.loss + '40',
-              }]}>
-                <Text style={[styles.sheetIcon, { color: mode === 'deposit' ? T.gain : T.loss }]}>
-                  {mode === 'deposit' ? '↓' : '↑'}
-                </Text>
-              </View>
+          <SheetSurface style={styles.sheetPanel} tint={tint}>
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
               <View>
-                <Text style={styles.sheetTitle}>{mode === 'deposit' ? 'Add Funds' : 'Withdraw'}</Text>
-                <Text style={styles.sheetSubtitle}>
-                  {mode === 'deposit' ? 'Deposit assets to your wallet' : 'Withdraw assets from your wallet'}
-                </Text>
-              </View>
-            </View>
+                <View style={styles.sheetHandle} />
 
-            <Text style={styles.sheetLabel}>Select Asset</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.assetPickerScroll}>
-              <View style={styles.assetPickerRow}>
-                {MODAL_ASSETS.map((a) => {
-                  const m = ASSET_META[a];
-                  const selected = asset === a;
-                  return (
-                    <TouchableOpacity
-                      key={a}
-                      onPress={() => setAsset(a)}
-                      style={[
-                        styles.assetPill,
-                        selected && { borderColor: m.color, backgroundColor: m.color + '18' },
-                      ]}
-                    >
-                      <View style={[styles.assetPillDot, { backgroundColor: m.color }]} />
-                      <Text style={[styles.assetPillText, selected && { color: m.color }]}>{a}</Text>
+                <View style={styles.sheetHeader}>
+                  {!showMethodStep && !showDepositDetails && (
+                    <TouchableOpacity onPress={goBackToMethod} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                      <Text style={styles.backBtnText}>‹</Text>
                     </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
-
-            <Text style={styles.sheetLabel}>Amount</Text>
-            <View style={styles.amountWrap}>
-              <Text style={styles.amountSymbol}>{meta?.symbol ?? '$'}</Text>
-              <TextInput
-                style={styles.amountInput}
-                value={amount}
-                onChangeText={setAmount}
-                placeholder="0.00"
-                placeholderTextColor={T.textTer}
-                keyboardType="decimal-pad"
-                autoFocus={false}
-              />
-              <TouchableOpacity onPress={() => setAmount('100')} style={styles.maxBtn}>
-                <Text style={styles.maxText}>MAX</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.sheetInfoRow}>
-              <Text style={styles.sheetInfoLabel}>Network fee</Text>
-              <Text style={styles.sheetInfoValue}>~$0.50</Text>
-            </View>
-            <View style={styles.sheetInfoRow}>
-              <Text style={styles.sheetInfoLabel}>Processing time</Text>
-              <Text style={styles.sheetInfoValue}>{mode === 'deposit' ? 'Instant' : '1-2 mins'}</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.sheetSubmitBtn}
-              onPress={handleSubmit}
-              disabled={loading}
-              activeOpacity={0.85}
-            >
-              <LinearGradient
-                colors={mode === 'deposit' ? ['#3DDC97', '#2AB87D'] : ['#FF6B7A', '#D94F5C']}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={styles.sheetSubmitGradient}
-              >
-                {loading
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={styles.sheetSubmitText}>
-                      {mode === 'deposit' ? 'CONFIRM DEPOSIT' : 'CONFIRM WITHDRAWAL'} →
+                  )}
+                  <View style={[styles.sheetIconWrap, {
+                    backgroundColor: mode === 'deposit' ? T.gainDim : T.lossDim,
+                    borderColor: mode === 'deposit' ? T.gain + '40' : T.loss + '40',
+                  }]}>
+                    <Text style={[styles.sheetIcon, { color: mode === 'deposit' ? T.gain : T.loss }]}>
+                      {mode === 'deposit' ? '↓' : '↑'}
                     </Text>
-                }
-              </LinearGradient>
-            </TouchableOpacity>
-          </GlassPanel>
+                  </View>
+                  <View>
+                    <Text style={styles.sheetTitle}>{mode === 'deposit' ? 'Add Funds' : 'Withdraw'}</Text>
+                    <Text style={styles.sheetSubtitle}>
+                      {mode === 'deposit' ? 'Deposit assets to your wallet' : 'Withdraw assets from your wallet'}
+                    </Text>
+                  </View>
+                </View>
+
+                {showMethodStep ? (
+                  <View style={styles.methodGrid}>
+                    <TouchableOpacity style={styles.methodCard} onPress={() => selectKind('FIAT')} activeOpacity={0.85}>
+                      <View style={[styles.methodIconWrap, { backgroundColor: T.gainDim, borderColor: T.gain + '40' }]}>
+                        <Text style={[styles.methodIcon, { color: T.gain }]}>$</Text>
+                      </View>
+                      <Text style={styles.methodTitle}>USDT</Text>
+                      <Text style={styles.methodSubtitle}>Via Stripe checkout</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.methodCard} onPress={() => selectKind('CRYPTO')} activeOpacity={0.85}>
+                      <View style={[styles.methodIconWrap, { backgroundColor: T.accentDeep + '20', borderColor: T.accent + '40' }]}>
+                        <Text style={[styles.methodIcon, { color: T.accent }]}>₿</Text>
+                      </View>
+                      <Text style={styles.methodTitle}>Crypto</Text>
+                      <Text style={styles.methodSubtitle}>On-chain transfer</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : showDepositDetails ? (
+                  <>
+                    <View style={styles.intentCard}>
+                      <Text style={styles.intentCardTitle}>Deposit intent ready</Text>
+                      <Text style={styles.intentCardText}>
+                        {pendingDeposit.type === 'FIAT_STRIPE'
+                          ? 'Your checkout session is ready. The deposit remains pending until the processor confirms it.'
+                          : 'Send funds to the address below. The deposit remains pending until you confirm completion.'}
+                      </Text>
+                      <View style={styles.intentDetailRow}>
+                        <Text style={styles.intentDetailLabel}>Asset</Text>
+                        <Text style={styles.intentDetailValue}>{pendingDeposit.asset}</Text>
+                      </View>
+                      <View style={styles.intentDetailRow}>
+                        <Text style={styles.intentDetailLabel}>Amount</Text>
+                        <Text style={styles.intentDetailValue}>{pendingDeposit.amount}</Text>
+                      </View>
+                      {pendingDeposit.cryptoDepositAddress ? (
+                        <View style={styles.intentAddressBox}>
+                          <Text style={styles.intentAddressLabel}>Deposit address</Text>
+                          <Text style={styles.intentAddressText}>{pendingDeposit.cryptoDepositAddress}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+
+                    {pendingDeposit.type === 'FIAT_STRIPE' ? (
+                      <TouchableOpacity
+                        style={styles.sheetSubmitBtn}
+                        onPress={openCheckout}
+                        disabled={!pendingDeposit.stripeCheckoutUrl}
+                        activeOpacity={0.85}
+                      >
+                        <LinearGradient
+                          colors={['#3DDC97', '#2AB87D']}
+                          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                          style={styles.sheetSubmitGradient}
+                        >
+                          <Text style={styles.sheetSubmitText}>OPEN CHECKOUT →</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.sheetSubmitBtn}
+                        onPress={confirmCryptoDeposit}
+                        disabled={simulateCryptoDeposit.isPending}
+                        activeOpacity={0.85}
+                      >
+                        <LinearGradient
+                          colors={['#3DDC97', '#2AB87D']}
+                          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                          style={styles.sheetSubmitGradient}
+                        >
+                          {simulateCryptoDeposit.isPending
+                            ? <ActivityIndicator color="#fff" />
+                            : <Text style={styles.sheetSubmitText}>I&apos;VE SENT THE FUNDS →</Text>
+                          }
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity style={styles.sheetGhostBtn} onPress={dismissModal}>
+                      <Text style={styles.sheetGhostText}>Close</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    {kind === 'FIAT' ? (
+                      <View style={styles.fixedAssetRow}>
+                        <View style={[styles.assetPillDot, { backgroundColor: ASSET_META.USDT.color }]} />
+                        <Text style={styles.fixedAssetText}>USDT</Text>
+                        <View style={styles.fixedAssetBadge}>
+                          <Text style={styles.fixedAssetBadgeText}>STRIPE</Text>
+                        </View>
+                      </View>
+                    ) : (
+                      <>
+                        <Text style={styles.sheetLabel}>Select Asset</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.assetPickerScroll} keyboardShouldPersistTaps="handled">
+                          <View style={styles.assetPickerRow}>
+                            {CRYPTO_ASSETS.map((a) => {
+                              const m = ASSET_META[a];
+                              const selected = asset === a;
+                              return (
+                                <TouchableOpacity
+                                  key={a}
+                                  onPress={() => setAsset(a)}
+                                  style={[
+                                    styles.assetPill,
+                                    selected && { borderColor: m.color, backgroundColor: m.color + '18' },
+                                  ]}
+                                >
+                                  <View style={[styles.assetPillDot, { backgroundColor: m.color }]} />
+                                  <Text style={[styles.assetPillText, selected && { color: m.color }]}>{a}</Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        </ScrollView>
+                      </>
+                    )}
+
+                    <Text style={styles.sheetLabel}>Amount</Text>
+                    <View style={styles.amountWrap}>
+                      <Text style={styles.amountSymbol}>{meta?.symbol ?? '$'}</Text>
+                      <TextInput
+                        style={styles.amountInput}
+                        value={amount}
+                        onChangeText={setAmount}
+                        placeholder="0.00"
+                        placeholderTextColor={T.textTer}
+                        keyboardType="decimal-pad"
+                        autoFocus={false}
+                        returnKeyType="done"
+                        onSubmitEditing={Keyboard.dismiss}
+                      />
+                      <TouchableOpacity onPress={() => setAmount('100')} style={styles.maxBtn}>
+                        <Text style={styles.maxText}>MAX</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.sheetInfoRow}>
+                      <Text style={styles.sheetInfoLabel}>Network fee</Text>
+                      <Text style={styles.sheetInfoValue}>{kind === 'FIAT' ? '~$0.50' : 'Network dependent'}</Text>
+                    </View>
+                    <View style={styles.sheetInfoRow}>
+                      <Text style={styles.sheetInfoLabel}>Processing time</Text>
+                      <Text style={styles.sheetInfoValue}>
+                        {mode === 'withdraw' ? '1-2 mins' : kind === 'FIAT' ? 'Instant after checkout' : 'Pending confirmation'}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.sheetSubmitBtn}
+                      onPress={handleSubmit}
+                      disabled={loading}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient
+                        colors={mode === 'deposit' ? ['#3DDC97', '#2AB87D'] : ['#FF6B7A', '#D94F5C']}
+                        start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                        style={styles.sheetSubmitGradient}
+                      >
+                        {loading
+                          ? <ActivityIndicator color="#fff" />
+                          : <Text style={styles.sheetSubmitText}>
+                              {mode === 'deposit'
+                                ? (kind === 'FIAT' ? 'CONTINUE TO STRIPE' : 'CREATE DEPOSIT INTENT')
+                                : 'CONFIRM WITHDRAWAL'} →
+                            </Text>
+                        }
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            </TouchableWithoutFeedback>
+          </SheetSurface>
         </Animated.View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
 
-// ─── [P2] AssetCard — memo with custom comparator ─────────────────────────────
-// Only re-renders when this specific asset's balance or USD value changes.
-// Without memo, every 30s balance refetch re-renders all asset cards.
+function TransferModal({ visible, onClose, onSuccess }: {
+  visible: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [asset, setAsset] = useState<typeof MODAL_ASSETS[number]>('USDT');
+  const [recipient, setRecipient] = useState('');
+  const [amount, setAmount] = useState('');
+
+  const transferFunds = useTransferFunds();
+
+  const translateY = useSharedValue(600);
+  const backdropOp = useSharedValue(0);
+  const keyboardHeight = useKeyboardOffset();
+
+  useEffect(() => {
+    if (visible) {
+      backdropOp.value = withTiming(1, { duration: 280 });
+      translateY.value = withSpring(0, { damping: 20, stiffness: 160 });
+    } else {
+      backdropOp.value = withTiming(0, { duration: 220 });
+      translateY.value = withTiming(600, { duration: 260 });
+      setRecipient('');
+      setAmount('');
+      setAsset('USDT');
+    }
+  }, [visible]);
+
+  const sheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value - keyboardHeight.value }],
+  }));
+  const backdropStyle = useAnimatedStyle(() => ({ opacity: backdropOp.value }));
+
+  const dismissModal = useCallback(() => {
+    Keyboard.dismiss();
+    setRecipient('');
+    setAmount('');
+    setAsset('USDT');
+    onClose();
+  }, [onClose]);
+
+  const handleSubmit = async () => {
+    Keyboard.dismiss();
+    const parsed = parseFloat(amount);
+    if (!recipient.trim()) {
+      Alert.alert('Missing recipient', 'Enter a recipient email or user id.');
+      return;
+    }
+    if (!amount || isNaN(parsed) || parsed <= 0) {
+      Alert.alert('Invalid Amount', 'Please enter a valid amount.');
+      return;
+    }
+
+    try {
+      await transferFunds.mutateAsync({
+        recipient: recipient.trim(),
+        asset,
+        amount: parsed,
+        requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      });
+      Alert.alert('Transfer complete', 'Balances and history have been updated.');
+      setRecipient('');
+      setAmount('');
+      setAsset('USDT');
+      onSuccess();
+      onClose();
+    } catch (err: any) {
+      Alert.alert('Transfer failed', err.response?.data?.error || 'Something went wrong');
+    }
+  };
+
+  const loading = transferFunds.isPending;
+  const meta = ASSET_META[asset];
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={dismissModal}>
+      <View style={{ flex: 1 }}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={dismissModal} />
+        </Animated.View>
+
+        <Animated.View style={[styles.sheet, sheetStyle]}>
+          <SheetSurface style={styles.sheetPanel} tint={['rgba(124,138,255,0.14)', 'transparent']}>
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+              <View>
+                <View style={styles.sheetHandle} />
+
+                <View style={styles.sheetHeader}>
+                  <View style={[styles.sheetIconWrap, {
+                    backgroundColor: T.accentDeep + '20',
+                    borderColor: T.accent + '40',
+                  }]}>
+                    <Text style={[styles.sheetIcon, { color: T.accent }]}>⇄</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.sheetTitle}>Transfer</Text>
+                    <Text style={styles.sheetSubtitle}>Move funds to another wallet user</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.sheetLabel}>Select Asset</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.assetPickerScroll} keyboardShouldPersistTaps="handled">
+                  <View style={styles.assetPickerRow}>
+                    {MODAL_ASSETS.map((a) => {
+                      const m = ASSET_META[a];
+                      const selected = asset === a;
+                      return (
+                        <TouchableOpacity
+                          key={a}
+                          onPress={() => setAsset(a)}
+                          style={[
+                            styles.assetPill,
+                            selected && { borderColor: m.color, backgroundColor: m.color + '18' },
+                          ]}
+                        >
+                          <View style={[styles.assetPillDot, { backgroundColor: m.color }]} />
+                          <Text style={[styles.assetPillText, selected && { color: m.color }]}>{a}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+
+                <Text style={styles.sheetLabel}>Recipient Email or User ID</Text>
+                <View style={styles.recipientWrap}>
+                  <TextInput
+                    style={styles.recipientInput}
+                    value={recipient}
+                    onChangeText={setRecipient}
+                    placeholder="user@example.com or user id"
+                    placeholderTextColor={T.textTer}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    returnKeyType="next"
+                  />
+                </View>
+
+                <Text style={styles.sheetLabel}>Amount</Text>
+                <View style={styles.amountWrap}>
+                  <Text style={styles.amountSymbol}>{meta?.symbol ?? '$'}</Text>
+                  <TextInput
+                    style={styles.amountInput}
+                    value={amount}
+                    onChangeText={setAmount}
+                    placeholder="0.00"
+                    placeholderTextColor={T.textTer}
+                    keyboardType="decimal-pad"
+                    returnKeyType="done"
+                    onSubmitEditing={Keyboard.dismiss}
+                  />
+                  <TouchableOpacity onPress={() => setAmount('100')} style={styles.maxBtn}>
+                    <Text style={styles.maxText}>MAX</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.sheetInfoRow}>
+                  <Text style={styles.sheetInfoLabel}>Processing time</Text>
+                  <Text style={styles.sheetInfoValue}>Instant</Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.sheetSubmitBtn}
+                  onPress={handleSubmit}
+                  disabled={loading}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={['#7C8AFF', '#5B63E8']}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                    style={styles.sheetSubmitGradient}
+                  >
+                    {loading
+                      ? <ActivityIndicator color="#fff" />
+                      : <Text style={styles.sheetSubmitText}>SEND TRANSFER →</Text>
+                    }
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.sheetGhostBtn} onPress={dismissModal}>
+                  <Text style={styles.sheetGhostText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </SheetSurface>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
 const AssetCard = memo(function AssetCard({
   asset, balance, usdValue, index,
 }: {
@@ -5755,7 +5990,6 @@ const AssetCard = memo(function AssetCard({
   const onPressIn = useCallback(() => { scale.value = withSpring(0.97); }, []);
   const onPressOut = useCallback(() => { scale.value = withSpring(1); }, []);
 
-  // [P5] Format only when balance/usd changes
   const balanceStr = useMemo(() => {
     if (balance < 0.001) return balance.toFixed(6);
     if (balance < 1) return balance.toFixed(4);
@@ -5773,7 +6007,7 @@ const AssetCard = memo(function AssetCard({
       style={[animStyle, styles.assetCardWrap]}
     >
       <TouchableOpacity activeOpacity={1} onPressIn={onPressIn} onPressOut={onPressOut}>
-        <GlassPanel style={styles.assetCard} intensity={24}>
+        <View style={styles.assetCard}>
           <LinearGradient
             colors={[meta.color + '0A', 'transparent']}
             start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
@@ -5795,46 +6029,55 @@ const AssetCard = memo(function AssetCard({
           </View>
 
           <View style={[styles.assetCardAccent, { backgroundColor: meta.color }]} />
-        </GlassPanel>
+        </View>
       </TouchableOpacity>
     </Animated.View>
   );
-// [P2] Custom comparator: re-render only if balance or usd value changed
 }, (prev, next) =>
   prev.asset === next.asset &&
   prev.balance === next.balance &&
   prev.usdValue === next.usdValue
 );
 
-// ─── [P3] HistoryRow — memo: history items are immutable after fetch ───────────
 const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
-  const isDeposit = item.type === 'DEPOSIT';
+  const isDeposit = item.kind === 'DEPOSIT';
+  const isTransfer = item.kind === 'TRANSFER';
   const isPending = item.status === 'PENDING' || item.status === 'PROCESSING';
   const isFailed = item.status === 'FAILED';
   const statusColor = isFailed ? T.loss : isPending ? T.gold : T.gain;
+  const direction = isTransfer ? item.flow : (isDeposit ? 'IN' : 'OUT');
+  const amountPrefix = direction === 'OUT' ? '-' : '+';
+  const label = isTransfer
+    ? `Transfer ${direction === 'OUT' ? 'out' : 'in'}`
+    : isDeposit
+      ? 'Deposit'
+      : 'Withdrawal';
+  const iconColor = isTransfer ? T.accent : isDeposit ? T.gain : T.loss;
+  const iconBg = isTransfer ? T.accentDeep + '18' : isDeposit ? T.gainDim : T.lossDim;
+  const borderColor = isTransfer ? T.accent + '30' : isDeposit ? T.gain + '30' : T.loss + '30';
 
   return (
     <Animated.View entering={FadeInDown.delay(Math.min(index, 8) * 50).springify().damping(18)} style={styles.historyRow}>
       <View style={[
         styles.historyIconWrap,
         {
-          backgroundColor: isDeposit ? T.gainDim : T.lossDim,
-          borderColor: isDeposit ? T.gain + '30' : T.loss + '30',
+          backgroundColor: iconBg,
+          borderColor,
         },
       ]}>
-        <Text style={[styles.historyIcon, { color: isDeposit ? T.gain : T.loss }]}>
-          {isDeposit ? '↓' : '↑'}
+        <Text style={[styles.historyIcon, { color: iconColor }]}>
+          {isTransfer ? '⇄' : isDeposit ? '↓' : '↑'}
         </Text>
       </View>
 
       <View style={styles.historyInfo}>
-        <Text style={styles.historyType}>{isDeposit ? 'Deposit' : 'Withdrawal'}</Text>
+        <Text style={styles.historyType}>{label}</Text>
         <Text style={styles.historyTime}>{item.time}</Text>
       </View>
 
       <View style={styles.historyRight}>
-        <Text style={[styles.historyAmount, { color: isDeposit ? T.gain : T.loss }]}>
-          {isDeposit ? '+' : '-'}{item.amount} {item.asset}
+        <Text style={[styles.historyAmount, { color: iconColor }]}>
+          {amountPrefix}{item.amount} {item.asset}
         </Text>
         <View style={[styles.historyStatusPill, { backgroundColor: statusColor + '18' }]}>
           <Text style={[styles.historyStatus, { color: statusColor }]}>
@@ -5846,48 +6089,86 @@ const HistoryRow = memo(function HistoryRow({ item, index }: { item: HistoryItem
   );
 });
 
-// ─── [B2] Transaction history is now sourced from the funding-service via
-// the useFundingHistory hook + fundingStore (see hooks/useFunding.ts).
-// This local mapper just adapts the store's FundingTransaction shape into
-// the HistoryItem shape this screen already renders.
-function toHistoryItems(transactions: ReturnType<typeof useFundingStore.getState>['transactions']): HistoryItem[] {
+function toFundingHistoryItems(transactions: ReturnType<typeof useFundingStore.getState>['transactions']): HistoryItem[] {
   return transactions.map((tx) => ({
     id: tx.id,
-    type: tx.direction === 'DEPOSIT' ? 'DEPOSIT' : 'WITHDRAW',
+    kind: tx.direction === 'DEPOSIT' ? 'DEPOSIT' : 'WITHDRAW',
+    title: tx.direction === 'DEPOSIT' ? 'Deposit' : 'Withdrawal',
     asset: tx.asset.toUpperCase(),
     amount: tx.amount,
     status: tx.status,
+    createdAt: tx.createdAt,
     time: new Date(tx.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
   }));
 }
 
-// ─── Main screen ───────────────────────────────────────────────────────────────
+function toTransferHistoryItems(transfers: WalletTransferRecord[]): HistoryItem[] {
+  return transfers.map((tx) => ({
+    id: tx.id,
+    kind: 'TRANSFER',
+    flow: tx.direction,
+    title: tx.direction === 'OUT'
+      ? `To ${tx.counterpartyEmail || tx.counterpartyId}`
+      : `From ${tx.counterpartyEmail || tx.counterpartyId}`,
+    asset: tx.asset.toUpperCase(),
+    amount: tx.amount,
+    status: tx.status,
+    createdAt: tx.createdAt,
+    time: new Date(tx.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+  }));
+}
+
+function sortHistoryItems(items: HistoryItem[]) {
+  return [...items].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
 export default function Wallet() {
   const insets = useSafeAreaInsets();
 
-  // [B1] Real balances via React Query + walletStore
   const { isLoading, isFetching, refetch } = useWallet();
+  const { isLoading: transferHistoryLoading, refetch: refetchTransfers, data: transferRecords = [] } = useWalletTransfers();
 
-  // [B4] Read computed values from the store (setBalances computes totalUsd)
   const balances = useWalletStore((s) => s.balances);
   const totalUsd = useWalletStore((s) => s.totalUsd);
+  const marketPrices = useMarketStore((s) => s.prices);
+
+  const livePrices = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const [symbol, data] of Object.entries(marketPrices)) {
+      out[symbol.replace('USDT', '')] = data.price;
+    }
+    return out;
+  }, [marketPrices]);
 
   const [modalMode, setModalMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [modalVisible, setModalVisible] = useState(false);
+  const [transferVisible, setTransferVisible] = useState(false);
   const [activeSection, setActiveSection] = useState<'assets' | 'history'>('assets');
-
-  // [B2] Real funding history via React Query + fundingStore
   const { isLoading: historyLoading, refetch: refetchHistory } = useFundingHistory();
-  const transactions = useFundingStore((s) => s.transactions);
-  const history = useMemo(() => toHistoryItems(transactions), [transactions]);
 
-  // [P5] Derive assetList from store — only recomputes when balances changes
+  const scrollRef = useRef<ScrollView>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+      setActiveSection('assets');
+      refetch();
+      refetchHistory();
+      refetchTransfers();
+    }, [refetch, refetchHistory, refetchTransfers])
+  );
+
+  const transactions = useFundingStore((s) => s.transactions);
+  const history = useMemo(() => sortHistoryItems([
+    ...toFundingHistoryItems(transactions),
+    ...toTransferHistoryItems(transferRecords),
+  ]), [transactions, transferRecords]);
+
   const assetList = useMemo(() =>
     Object.entries(balances).filter(([, v]) => v > 0),
     [balances]
   );
 
-  // [P4] Stable handler references
   const openDeposit = useCallback(() => {
     setModalMode('deposit');
     setModalVisible(true);
@@ -5898,15 +6179,30 @@ export default function Wallet() {
     setModalVisible(true);
   }, []);
 
-  const closeModal = useCallback(() => setModalVisible(false), []);
+  const openTransfer = useCallback(() => {
+    setTransferVisible(true);
+  }, []);
 
-  // After a successful deposit/withdraw, refetch balance and history
+  const closeModal = useCallback(() => setModalVisible(false), []);
+  const closeTransfer = useCallback(() => setTransferVisible(false), []);
+
   const onFundingSuccess = useCallback(() => {
     refetch();
     refetchHistory();
-  }, [refetch, refetchHistory]);
+    refetchTransfers();
+  }, [refetch, refetchHistory, refetchTransfers]);
 
-  const onRefresh = useCallback(() => { refetch(); }, [refetch]);
+  const onTransferSuccess = useCallback(() => {
+    refetch();
+    refetchHistory();
+    refetchTransfers();
+  }, [refetch, refetchHistory, refetchTransfers]);
+
+  const onRefresh = useCallback(() => {
+    refetch();
+    refetchHistory();
+    refetchTransfers();
+  }, [refetch, refetchHistory, refetchTransfers]);
 
   const handleSectionAssets = useCallback(() => setActiveSection('assets'), []);
   const handleSectionHistory = useCallback(() => setActiveSection('history'), []);
@@ -5921,6 +6217,7 @@ export default function Wallet() {
       <AmbientField />
 
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 120 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -5931,7 +6228,6 @@ export default function Wallet() {
           />
         }
       >
-        {/* ── Header ──────────────────────────────────────────────── */}
         <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
           <View>
             <Text style={styles.pageLabel}>Wallet</Text>
@@ -5942,19 +6238,19 @@ export default function Wallet() {
           </TouchableOpacity>
         </Animated.View>
 
-        {/* ── Hero balance card ────────────────────────────────────── */}
         <Animated.View entering={FadeInDown.delay(80).springify().damping(16)} style={styles.heroWrap}>
-          <GlassPanel style={styles.heroPanel} intensity={32}>
+          <GlassPanel style={styles.heroPanel} intensity={34}>
             <LinearGradient
-              colors={['rgba(255,255,255,0.07)', 'rgba(255,255,255,0)']}
-              start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.5 }}
+              colors={['rgba(255,255,255,0.10)', 'rgba(255,255,255,0)']}
+              start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.45 }}
               style={StyleSheet.absoluteFill}
             />
             <LinearGradient
-              colors={['rgba(124,138,255,0.12)', 'transparent']}
-              start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.9 }}
+              colors={['rgba(124,138,255,0.14)', 'rgba(181,131,255,0.04)', 'transparent']}
+              start={{ x: 0.05, y: 0 }} end={{ x: 0.95, y: 0.9 }}
               style={StyleSheet.absoluteFill}
             />
+            <View style={styles.heroInnerBorder} pointerEvents="none" />
 
             <View style={styles.heroTop}>
               <View style={styles.heroBadge}>
@@ -5970,7 +6266,7 @@ export default function Wallet() {
 
               <View style={styles.heroDeltaRow}>
                 <View style={styles.heroDeltaBadge}>
-                  <Text style={styles.heroDeltaText}>↑ +3.51% today</Text>
+                  <Text style={styles.heroDeltaText}>Portfolio analytics coming soon</Text>
                 </View>
                 <Text style={styles.heroAssetCount}>{assetList.length} assets</Text>
               </View>
@@ -6001,7 +6297,7 @@ export default function Wallet() {
                 </LinearGradient>
               </TouchableOpacity>
 
-              <TouchableOpacity style={[styles.heroActionBtn, styles.heroActionBtnGhost]} activeOpacity={0.8}>
+              <TouchableOpacity style={[styles.heroActionBtn, styles.heroActionBtnGhost]} onPress={openTransfer} activeOpacity={0.8}>
                 <Text style={[styles.heroActionIcon, styles.heroActionIconAccent]}>→</Text>
                 <Text style={[styles.heroActionText, styles.heroActionTextAccent]}>TRANSFER</Text>
               </TouchableOpacity>
@@ -6009,7 +6305,6 @@ export default function Wallet() {
           </GlassPanel>
         </Animated.View>
 
-        {/* ── Section toggle ───────────────────────────────────────── */}
         <Animated.View entering={FadeInDown.delay(160).springify().damping(16)} style={styles.sectionToggle}>
           <TouchableOpacity
             onPress={handleSectionAssets}
@@ -6044,80 +6339,75 @@ export default function Wallet() {
           </TouchableOpacity>
         </Animated.View>
 
-        {/* ── Assets section ───────────────────────────────────────── */}
-        {activeSection === 'assets' ? (
-          <View>
-            <View style={styles.sectionLabelRow}>
-              <View style={styles.sectionAccentBar} />
-              <Text style={styles.sectionLabelText}>Your Holdings</Text>
-              <View style={styles.sectionCountPill}>
-                <Text style={styles.sectionCountText}>{assetList.length}</Text>
-              </View>
+        <View style={activeSection === 'assets' ? undefined : styles.hidden}>
+          <View style={styles.sectionLabelRow}>
+            <View style={styles.sectionAccentBar} />
+            <Text style={styles.sectionLabelText}>Your Holdings</Text>
+            <View style={styles.sectionCountPill}>
+              <Text style={styles.sectionCountText}>{assetList.length}</Text>
             </View>
-
-            {isLoading ? (
-              <View style={styles.loadingState}>
-                <ActivityIndicator color={T.accent} />
-                <Text style={styles.loadingText}>Loading balances...</Text>
-              </View>
-            ) : assetList.length === 0 ? (
-              <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
-                <Text style={styles.emptyIcon}>◎</Text>
-                <Text style={styles.emptyTitle}>No Assets Yet</Text>
-                <Text style={styles.emptyText}>Add funds to get started trading</Text>
-                <TouchableOpacity style={styles.emptyBtn} onPress={openDeposit}>
-                  <LinearGradient
-                    colors={[T.accentDeep, T.violet]}
-                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                    style={styles.emptyBtnGradient}
-                  >
-                    <Text style={styles.emptyBtnText}>Add Funds →</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              </Animated.View>
-            ) : (
-              assetList.map(([asset, balance], i) => {
-                // Compute usdValue here so AssetCard's memo comparator can use it
-                const meta = ASSET_META[asset];
-                const usdValue = balance * (meta ? 1 : 0); // walletStore already has price-adjusted total; pass raw for display
-                return (
-                  <AssetCard
-                    key={asset}
-                    asset={asset}
-                    balance={balance}
-                    usdValue={usdValue}
-                    index={i}
-                  />
-                );
-              })
-            )}
           </View>
-        ) : (
-          /* ── History section ────────────────────────────────────── */
-          <View>
-            <View style={styles.sectionLabelRow}>
-              <View style={styles.sectionAccentBar} />
-              <Text style={styles.sectionLabelText}>Transaction History</Text>
+
+          {isLoading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator color={T.accent} />
+              <Text style={styles.loadingText}>Loading balances...</Text>
             </View>
+          ) : assetList.length === 0 ? (
+            <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>◎</Text>
+              <Text style={styles.emptyTitle}>No Assets Yet</Text>
+              <Text style={styles.emptyText}>Add funds to get started trading</Text>
+              <TouchableOpacity style={styles.emptyBtn} onPress={openDeposit}>
+                <LinearGradient
+                  colors={[T.accentDeep, T.violet]}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={styles.emptyBtnGradient}
+                >
+                  <Text style={styles.emptyBtnText}>Add Funds →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </Animated.View>
+          ) : (
+            assetList.map(([asset, balance], i) => {
+              const price = livePrices[asset] ?? PRICE_MAP[asset] ?? 0;
+              const usdValue = balance * price;
+              return (
+                <AssetCard
+                  key={asset}
+                  asset={asset}
+                  balance={balance}
+                  usdValue={usdValue}
+                  index={i}
+                />
+              );
+            })
+          )}
+        </View>
 
-            {historyLoading ? (
-              <View style={styles.loadingState}>
-                <ActivityIndicator color={T.accent} />
-                <Text style={styles.loadingText}>Loading history...</Text>
-              </View>
-            ) : history.length === 0 ? (
-              <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
-                <Text style={styles.emptyIcon}>◎</Text>
-                <Text style={styles.emptyTitle}>No Transactions</Text>
-                <Text style={styles.emptyText}>Your deposits and withdrawals will appear here</Text>
-              </Animated.View>
-            ) : (
-              history.map((item, i) => (
-                <HistoryRow key={item.id} item={item} index={i} />
-              ))
-            )}
+        <View style={activeSection === 'history' ? undefined : styles.hidden}>
+          <View style={styles.sectionLabelRow}>
+            <View style={styles.sectionAccentBar} />
+            <Text style={styles.sectionLabelText}>Transaction History</Text>
           </View>
-        )}
+
+          {historyLoading || transferHistoryLoading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator color={T.accent} />
+              <Text style={styles.loadingText}>Loading history...</Text>
+            </View>
+          ) : history.length === 0 ? (
+            <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>◎</Text>
+              <Text style={styles.emptyTitle}>No Transactions</Text>
+              <Text style={styles.emptyText}>Your deposits and withdrawals will appear here</Text>
+            </Animated.View>
+          ) : (
+            history.map((item, i) => (
+              <HistoryRow key={item.id} item={item} index={i} />
+            ))
+          )}
+        </View>
       </ScrollView>
 
       <FundingModal
@@ -6126,13 +6416,19 @@ export default function Wallet() {
         onClose={closeModal}
         onSuccess={onFundingSuccess}
       />
+
+      <TransferModal
+        visible={transferVisible}
+        onClose={closeTransfer}
+        onSuccess={onTransferSuccess}
+      />
     </View>
   );
 }
 
-// ─── Styles (not a single value changed from original) ───────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
+  hidden: { display: 'none' },
   scroll: { paddingHorizontal: 18 },
   ambientOrb: { position: 'absolute', width: 260, height: 260, borderRadius: 130, opacity: 0.13 },
 
@@ -6148,10 +6444,11 @@ const styles = StyleSheet.create({
 
   heroWrap: {
     marginBottom: 16, borderRadius: 26,
-    shadowColor: T.accentDeep, shadowOpacity: 0.24, shadowRadius: 28, shadowOffset: { width: 0, height: 10 },
-    elevation: 10,
+    shadowColor: T.accentDeep, shadowOpacity: 0.32, shadowRadius: 34, shadowOffset: { width: 0, height: 14 },
+    elevation: 12,
   },
   heroPanel: { borderRadius: 26, padding: 20, borderWidth: 1, borderColor: T.glassBorderHi },
+  heroInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 25, borderTopRightRadius: 25 },
   heroTop: { marginBottom: 18 },
   heroBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -6196,7 +6493,7 @@ const styles = StyleSheet.create({
   sectionCountText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent },
 
   assetCardWrap: { marginBottom: 10 },
-  assetCard: { borderRadius: 18, padding: 16, borderWidth: 1, borderColor: T.glassBorder, flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
+  assetCard: { borderRadius: 18, padding: 16, borderWidth: 1, borderColor: T.glassBorder, backgroundColor: T.glassUp, flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
   assetCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
   assetCardIcon: { width: 42, height: 42, borderRadius: 13, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   assetCardIconText: { fontSize: 13, fontFamily: FontFamily.heading },
@@ -6235,19 +6532,50 @@ const styles = StyleSheet.create({
 
   backdrop: { backgroundColor: 'rgba(0,0,0,0.7)' },
   sheet: { position: 'absolute', bottom: 0, left: 0, right: 0 },
+  sheetSolid: { backgroundColor: '#0C0E13' },
   sheetPanel: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, borderWidth: 1, borderColor: T.glassBorderHi, paddingBottom: 44 },
   sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: T.glassBorder, alignSelf: 'center', marginBottom: 22 },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24 },
+  backBtn: {
+    position: 'absolute', left: -4, top: -6, width: 32, height: 32, borderRadius: 16,
+    justifyContent: 'center', alignItems: 'center', backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder,
+  },
+  backBtnText: { fontSize: 20, fontFamily: FontFamily.heading, color: T.textSec, marginTop: -2 },
   sheetIconWrap: { width: 46, height: 46, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   sheetIcon: { fontSize: 20, fontFamily: FontFamily.heading },
   sheetTitle: { fontSize: 20, fontFamily: FontFamily.heading, color: T.textPri },
   sheetSubtitle: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
   sheetLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.8, marginBottom: 10 },
+
+  methodGrid: { flexDirection: 'row', gap: 12, marginBottom: 8 },
+  methodCard: {
+    flex: 1, borderRadius: 18, padding: 18, alignItems: 'center',
+    backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorderHi,
+  },
+  methodIconWrap: {
+    width: 48, height: 48, borderRadius: 15, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, marginBottom: 12,
+  },
+  methodIcon: { fontSize: 20, fontFamily: FontFamily.heading },
+  methodTitle: { fontSize: 14, fontFamily: FontFamily.heading, color: T.textPri, marginBottom: 4 },
+  methodSubtitle: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
+
+  fixedAssetRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: T.glass, borderRadius: 12, borderWidth: 1, borderColor: T.glassBorder,
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 16,
+  },
+  fixedAssetText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, flex: 1 },
+  fixedAssetBadge: { backgroundColor: T.gainDim, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  fixedAssetBadgeText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 0.6 },
+
   assetPickerScroll: { marginBottom: 20 },
   assetPickerRow: { flexDirection: 'row', gap: 8 },
   assetPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder },
   assetPillDot: { width: 6, height: 6, borderRadius: 3 },
   assetPillText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textSec },
+  recipientWrap: { backgroundColor: T.glass, borderRadius: 14, borderWidth: 1, borderColor: T.glassBorderHi, marginBottom: 16 },
+  recipientInput: { paddingHorizontal: 16, paddingVertical: 14, fontSize: 14, fontFamily: FontFamily.body, color: T.textPri },
   amountWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: T.glass, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: T.glassBorderHi, marginBottom: 16, gap: 10 },
   amountSymbol: { fontSize: 18, fontFamily: FontFamily.heading, color: T.textTer },
   amountInput: { flex: 1, fontSize: 22, fontFamily: FontFamily.heading, color: T.textPri },
@@ -6259,6 +6587,31 @@ const styles = StyleSheet.create({
   sheetSubmitBtn: { borderRadius: 14, overflow: 'hidden', marginTop: 16 },
   sheetSubmitGradient: { paddingVertical: 17, alignItems: 'center' },
   sheetSubmitText: { fontSize: 13, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 1.5 },
+  sheetGhostBtn: { alignSelf: 'center', marginTop: 14, paddingVertical: 6, paddingHorizontal: 14 },
+  sheetGhostText: { fontSize: 12, fontFamily: FontFamily.bodyMedium, color: T.textTer },
+  intentCard: {
+    backgroundColor: T.glass,
+    borderWidth: 1,
+    borderColor: T.glassBorderHi,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+  },
+  intentCardTitle: { fontSize: 15, fontFamily: FontFamily.heading, color: T.textPri, marginBottom: 8 },
+  intentCardText: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, lineHeight: 18, marginBottom: 14 },
+  intentDetailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  intentDetailLabel: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer },
+  intentDetailValue: { fontSize: 11, fontFamily: FontFamily.heading, color: T.textSec },
+  intentAddressBox: {
+    marginTop: 8,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: 'rgba(124,138,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(124,138,255,0.20)',
+  },
+  intentAddressLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textTer, marginBottom: 8, letterSpacing: 0.7 },
+  intentAddressText: { fontSize: 12, fontFamily: FontFamily.body, color: T.textPri, lineHeight: 17 },
 });
 </file>
 
@@ -6384,6 +6737,7 @@ export const FontSize = {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '../lib/api';
+import { useAuthStore } from '../stores/authStore';
 import {
   useFundingStore,
   FundingTransaction,
@@ -6453,11 +6807,14 @@ async function createWithdrawalIntentRequest(input: WithdrawIntentInput) {
 // GET /funding/transactions — deposit & withdrawal history for the wallet screen.
 export function useFundingHistory() {
   const setTransactions = useFundingStore((s) => s.setTransactions);
+  const token = useAuthStore((s) => s.token);
 
   const query = useQuery({
     queryKey: ['funding', 'transactions'],
     queryFn: fetchFundingHistory,
+    enabled: !!token,
     staleTime: 1000 * 20,
+    refetchInterval: 1000 * 15,
     retry: 2,
   });
 
@@ -6575,6 +6932,8 @@ export function useMarketSocket() {
       transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 3000,
+      reconnectionDelayMax: 15000,
+      timeout: 10000,
     });
     socketRef.current = socket;
 
@@ -6591,18 +6950,24 @@ export function useMarketSocket() {
     // them rather than relying solely on the socket being discarded.
     const handleConnect = () => setConnected(true);
     const handleDisconnect = () => setConnected(false);
+    const handleConnectError = () => setConnected(false);
+    const handleReconnect = () => setConnected(true);
 
     // The hot path. Every incoming tick just overwrites this symbol's
     // entry in the buffer — an O(1) property write, nothing reactive.
     // No Zustand call, no re-render, regardless of how fast messages
     // arrive.
     const handlePriceUpdate = (data: { asset: string; price: number }) => {
+      if (!data?.asset || !Number.isFinite(data.price)) return;
       pendingPrices[data.asset] = data.price;
     };
 
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
+    socket.on('connect_error', handleConnectError);
+    socket.io.on('reconnect', handleReconnect);
     socket.on('global-price-update', handlePriceUpdate);
+    socket.on('price-update', handlePriceUpdate);
 
     // Batch-flush loop: on a fixed cadence, drain whatever accumulated in
     // the buffer since the last tick and push it into the store.
@@ -6640,7 +7005,10 @@ export function useMarketSocket() {
       // cleanup regardless of how the socket instance is torn down.
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
+      socket.off('connect_error', handleConnectError);
+      socket.io.off('reconnect', handleReconnect);
       socket.off('global-price-update', handlePriceUpdate);
+      socket.off('price-update', handlePriceUpdate);
 
       socket.disconnect();
       socketRef.current = null;
@@ -6653,7 +7021,18 @@ export function useMarketSocket() {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '../lib/api';
-import { useOrderStore, Order, Trade, OrderSide } from '../stores/orderStore';
+import { useAuthStore } from '../stores/authStore';
+import { useOrderStore, Order, Trade, OrderSide, OrderType } from '../stores/orderStore';
+
+export interface OrderBookLevel {
+  price: number;
+  amount: number;
+}
+
+export interface OrderBook {
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+}
 
 async function fetchMyOrders() {
   const res = await api.get('/orders/my-orders');
@@ -6665,11 +7044,17 @@ async function fetchMyTrades() {
   return res.data.trades as Trade[];
 }
 
+async function fetchOrderBook(asset: string) {
+  const res = await api.get(`/orders/orderbook/${asset}`);
+  return { bids: res.data.bids, asks: res.data.asks } as OrderBook;
+}
+
 interface PlaceOrderInput {
   asset: string;
   side: OrderSide;
   price: number;
   amount: number;
+  type?: OrderType;
 }
 
 async function placeOrderRequest(input: PlaceOrderInput) {
@@ -6685,10 +7070,12 @@ async function cancelOrderRequest(orderId: string) {
 // GET /orders/my-orders — the source of truth for a user's open + historical orders.
 export function useMyOrders() {
   const setOrders = useOrderStore((s) => s.setOrders);
+  const token = useAuthStore((s) => s.token);
 
   const query = useQuery({
     queryKey: ['orders', 'my-orders'],
     queryFn: fetchMyOrders,
+    enabled: !!token,
     staleTime: 1000 * 15,
     refetchInterval: 1000 * 20,
     retry: 2,
@@ -6704,10 +7091,12 @@ export function useMyOrders() {
 // GET /orders/my-trades — fills/executions, separate from the resting orders list.
 export function useMyTrades() {
   const setTrades = useOrderStore((s) => s.setTrades);
+  const token = useAuthStore((s) => s.token);
 
   const query = useQuery({
     queryKey: ['orders', 'my-trades'],
     queryFn: fetchMyTrades,
+    enabled: !!token,
     staleTime: 1000 * 20,
     retry: 2,
   });
@@ -6719,7 +7108,23 @@ export function useMyTrades() {
   return query;
 }
 
-// POST /orders/place — submits a limit order to the matching engine via Kafka.
+// GET /orders/orderbook/:asset — real resting-order depth (aggregated from
+// the order-service DB, the same orders the matching-engine works through),
+// not a mock/random book. Polls fairly often since depth can move quickly.
+export function useOrderBook(asset: string) {
+  const token = useAuthStore((s) => s.token);
+
+  return useQuery({
+    queryKey: ['orders', 'orderbook', asset],
+    queryFn: () => fetchOrderBook(asset),
+    enabled: !!asset && !!token,
+    staleTime: 1000 * 3,
+    refetchInterval: 1000 * 4,
+    retry: 1,
+  });
+}
+
+// POST /orders/place — submits an order to the matching engine via Kafka.
 export function usePlaceOrder() {
   const queryClient = useQueryClient();
   const upsertOrder = useOrderStore((s) => s.upsertOrder);
@@ -6737,9 +7142,11 @@ export function usePlaceOrder() {
         price: String(variables.price),
         amount: String(variables.amount),
         status: 'PENDING',
+        type: variables.type ?? 'LIMIT',
         createdAt: new Date().toISOString(),
       });
       queryClient.invalidateQueries({ queryKey: ['orders', 'my-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['orders', 'orderbook', variables.asset] });
       queryClient.invalidateQueries({ queryKey: ['wallet-balance'] });
     },
   });
@@ -6752,9 +7159,10 @@ export function useCancelOrder() {
 
   return useMutation({
     mutationFn: cancelOrderRequest,
-    onSuccess: (_data, orderId) => {
+    onSuccess: (data, orderId) => {
       removeOrder(orderId);
       queryClient.invalidateQueries({ queryKey: ['orders', 'my-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['orders', 'orderbook', data.order.asset] });
     },
   });
 }
@@ -6979,8 +7387,10 @@ export function useTicker24h(symbols?: string[]) {
 
 <file path="hooks/useWallet.ts">
 import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '../lib/api';
+import { useAuthStore } from '../stores/authStore';
 import { useWalletStore } from '../stores/walletStore';
 import { useMarketStore } from '../stores/marketStore';
 
@@ -6989,9 +7399,39 @@ async function fetchWalletBalance() {
   return res.data.balance as Record<string, string>;
 }
 
+async function fetchWalletTransfers() {
+  const res = await api.get('/wallet/transfers');
+  return res.data.transfers as WalletTransferRecord[];
+}
+
+interface TransferFundsInput {
+  recipient: string;
+  asset: string;
+  amount: number;
+  requestId: string;
+}
+
+async function transferFundsRequest(input: TransferFundsInput) {
+  const res = await api.post('/wallet/transfer', input);
+  return res.data as { success: boolean; transfer: WalletTransferRecord; duplicate?: boolean };
+}
+
+export interface WalletTransferRecord {
+  id: string;
+  transferId: string;
+  direction: 'IN' | 'OUT';
+  asset: string;
+  amount: string;
+  counterpartyId: string;
+  counterpartyEmail: string;
+  status: 'COMPLETED';
+  createdAt: string;
+}
+
 export function useWallet() {
   const setBalances = useWalletStore((s) => s.setBalances);
   const prices = useMarketStore((s) => s.prices);
+  const token = useAuthStore((s) => s.token);
 
   const livePrices: Record<string, number> = {};
   for (const [symbol, data] of Object.entries(prices)) {
@@ -7002,6 +7442,7 @@ export function useWallet() {
   const query = useQuery({
     queryKey: ['wallet-balance'],
     queryFn: fetchWalletBalance,
+    enabled: !!token,
     staleTime: 1000 * 20,
     refetchInterval: 1000 * 30,
     retry: 2,
@@ -7019,6 +7460,31 @@ export function useWallet() {
     refetch: query.refetch,
     isFetching: query.isFetching,
   };
+}
+
+export function useWalletTransfers() {
+  const token = useAuthStore((s) => s.token);
+
+  return useQuery({
+    queryKey: ['wallet-transfers'],
+    queryFn: fetchWalletTransfers,
+    enabled: !!token,
+    staleTime: 1000 * 10,
+    refetchInterval: 1000 * 15,
+    retry: 2,
+  });
+}
+
+export function useTransferFunds() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: transferFundsRequest,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['wallet-balance'] });
+      queryClient.invalidateQueries({ queryKey: ['wallet-transfers'] });
+    },
+  });
 }
 </file>
 
@@ -7235,6 +7701,7 @@ import { create } from 'zustand';
 
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderStatus = 'PENDING' | 'FILLED' | 'CANCELLED' | 'PARTIAL';
+export type OrderType = 'LIMIT' | 'MARKET';
 export type TradeRole = 'MAKER' | 'TAKER';
 
 export interface Order {
@@ -7245,6 +7712,7 @@ export interface Order {
   price: string;
   amount: string;
   status: OrderStatus;
+  type?: OrderType;
   createdAt: string;
 }
 
@@ -7279,9 +7747,7 @@ export const useOrderStore = create<OrderState>((set, get) => ({
   setOrders: (orders) => set({ orders, lastFetched: Date.now() }),
 
   setTrades: (trades) => set({ trades }),
-
-  // Used for optimistic updates (e.g. right after placing an order,
-  // before the next my-orders refetch lands).
+  
   upsertOrder: (order) => {
     const existing = get().orders;
     const idx = existing.findIndex((o) => o.id === order.id);
@@ -7315,7 +7781,7 @@ interface WalletState {
   updateTotalUsd: (prices: Record<string, number>) => void;
 }
 
-const PRICE_MAP: Record<string, number> = {
+export const PRICE_MAP: Record<string, number> = {
   USDT: 1, USDC: 1,
   BTC: 67420, ETH: 3512, BNB: 412,
   SOL: 142, XRP: 0.52, ADA: 0.44,
@@ -7414,7 +7880,16 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/ before 
       "bundler": "metro"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "expo-web-browser",
+      "@stripe/stripe-react-native",
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.nexustrade.app",
+          "enableGooglePay": true
+        }
+      ]
     ]
   }
 }
@@ -7469,6 +7944,7 @@ module.exports = defineConfig([
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "@shopify/react-native-skia": "2.2.12",
+    "@stripe/stripe-react-native": "0.50.3",
     "@tanstack/react-query": "^5.101.2",
     "axios": "^1.18.1",
     "babel-preset-expo": "~54.0.10",

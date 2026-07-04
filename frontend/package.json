@@ -19,6 +19,7 @@
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "@shopify/react-native-skia": "2.2.12",
+    "@stripe/stripe-react-native": "0.50.3",
     "@tanstack/react-query": "^5.101.2",
     "axios": "^1.18.1",
     "babel-preset-expo": "~54.0.10",

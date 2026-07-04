@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '../lib/api';
+import { useAuthStore } from '../stores/authStore';
 import {
   useFundingStore,
   FundingTransaction,
@@ -70,11 +71,14 @@ async function createWithdrawalIntentRequest(input: WithdrawIntentInput) {
 // GET /funding/transactions — deposit & withdrawal history for the wallet screen.
 export function useFundingHistory() {
   const setTransactions = useFundingStore((s) => s.setTransactions);
+  const token = useAuthStore((s) => s.token);
 
   const query = useQuery({
     queryKey: ['funding', 'transactions'],
     queryFn: fetchFundingHistory,
+    enabled: !!token,
     staleTime: 1000 * 20,
+    refetchInterval: 1000 * 15,
     retry: 2,
   });
 

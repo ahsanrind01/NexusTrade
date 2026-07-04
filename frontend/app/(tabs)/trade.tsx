@@ -263,7 +263,7 @@ const OrderRow = memo(function OrderRow({
   const sideColor = order.side === 'BUY' ? T.gain : T.loss;
   const price = parseFloat(order.price);
   const amount = parseFloat(order.amount);
-  const isCancellable = order.status === 'PENDING' || order.status === 'PARTIAL';
+  const isCancellable = (order.status === 'PENDING' || order.status === 'PARTIAL') && Number(order.amount) > 0;
   const isMarket = order.type === 'MARKET';
 
   return (
@@ -286,7 +286,7 @@ const OrderRow = memo(function OrderRow({
       </View>
       <View style={{ alignItems: 'flex-end' }}>
         <View style={[styles.statusBadge, { backgroundColor: statusColor[order.status] + '18' }]}>
-          <Text style={[styles.statusText, { color: statusColor[order.status] }]}>{order.status}</Text>
+          <Text style={[styles.orderStatusText, { color: statusColor[order.status] }]}>{order.status}</Text>
         </View>
         <Text style={styles.orderTime}>
           {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -414,24 +414,34 @@ export default function Trade() {
 
   const selectedLivePrice = useMarketStore((s) => s.prices[selectedPair.symbol]?.price ?? 0);
   const connected = useMarketStore((s) => s.connected);
+  const restingLimitPrice = useMemo(() => {
+    if (!orderBook) return 0;
+    return side === 'BUY'
+      ? orderBook.bids[0]?.price ?? 0
+      : orderBook.asks[0]?.price ?? 0;
+  }, [orderBook, side]);
 
   const hasAutoFilledRef = useRef(false);
 
   useEffect(() => {
     hasAutoFilledRef.current = false;
     setPriceInput('');
-  }, [selectedPair.symbol]);
+  }, [selectedPair.symbol, side]);
 
   useEffect(() => {
-    if (selectedLivePrice > 0 && !hasAutoFilledRef.current) {
+    if (orderKind !== 'LIMIT' || hasAutoFilledRef.current) return;
+
+    const defaultPrice = restingLimitPrice > 0 ? restingLimitPrice : selectedLivePrice;
+
+    if (defaultPrice > 0) {
       setPriceInput(
-        selectedLivePrice >= 1000
-          ? selectedLivePrice.toFixed(2)
-          : selectedLivePrice >= 1 ? selectedLivePrice.toFixed(4) : selectedLivePrice.toFixed(6)
+        defaultPrice >= 1000
+          ? defaultPrice.toFixed(2)
+          : defaultPrice >= 1 ? defaultPrice.toFixed(4) : defaultPrice.toFixed(6)
       );
       hasAutoFilledRef.current = true;
     }
-  }, [selectedLivePrice]);
+  }, [orderKind, restingLimitPrice, selectedLivePrice]);
 
   const fetchWallet = useCallback(() => { refetchWallet(); }, [refetchWallet]);
   const fetchOrders = useCallback(() => { refetchOrders(); }, [refetchOrders]);
@@ -464,8 +474,6 @@ export default function Trade() {
     }
   }, [orderKind, marketRefPrice, priceInput, selectedLivePrice, side, usdtBalance, baseBalance]);
 
-  const MARKET_SLIPPAGE = 0.02;
-
   const handlePlaceOrder = useCallback(async () => {
     const amount = parseFloat(amountInput);
 
@@ -481,9 +489,7 @@ export default function Trade() {
         Alert.alert('No Liquidity', `There are no resting ${side === 'BUY' ? 'sell' : 'buy'} orders to match against right now.`);
         return;
       }
-      executionPrice = side === 'BUY'
-        ? marketRefPrice * (1 + MARKET_SLIPPAGE)
-        : marketRefPrice * (1 - MARKET_SLIPPAGE);
+      executionPrice = marketRefPrice;
     } else {
       const price = parseFloat(priceInput);
       if (!price || price <= 0) {
@@ -1087,7 +1093,7 @@ const styles = StyleSheet.create({
   },
   orderTypeBadgeText: { fontSize: 8, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 0.4 },
   statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginBottom: 3 },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
+  orderStatusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 0.3 },
   orderTime: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer },
   cancelBtn: {
     marginLeft: 10, width: 26, height: 26, borderRadius: 13,

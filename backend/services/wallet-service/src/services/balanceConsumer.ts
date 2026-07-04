@@ -1,7 +1,9 @@
 import { consumer } from '../config/kafka';
-import { redis } from '../config/redis';
+import { adjustTotalBalance } from './walletState';
+import { ensureKafkaTopics } from '../../../../shared/src/kafka/bootstrapTopics';
 
 export const startBalanceConsumer = async () => {
+  await ensureKafkaTopics('wallet-service', ['balance-updates']);
   await consumer.connect();
   await consumer.subscribe({ topic: 'balance-updates', fromBeginning: true });
 
@@ -9,9 +11,8 @@ export const startBalanceConsumer = async () => {
     eachMessage: async ({ message }) => {
       if (!message.value) return;
       const { userId, asset, newBalance } = JSON.parse(message.value.toString());
-      
-      const redisKey = `wallet:${userId}`;
-      await redis.hset(redisKey, asset.toUpperCase(), newBalance);
+
+      await adjustTotalBalance(userId, asset, Number(newBalance));
       console.log(`Wallet Cache Updated for User ${userId}: ${asset} = ${newBalance}`);
     },
   });

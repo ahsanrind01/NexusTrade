@@ -1,8 +1,15 @@
 import { consumer, connectKafka } from './config/kafka';
 import './config/redis'; 
 import { processCancelledOrder, processNewOrder } from './services/matchingService';
+import { ensureKafkaTopics } from '../../../shared/src/kafka/bootstrapTopics';
 
 const run = async () => {
+  await ensureKafkaTopics('matching-engine', [
+    'pending-orders',
+    'cancelled-orders',
+    'completed-trades',
+    'order-finalized',
+  ]);
   await connectKafka();
 
   await consumer.subscribe({ topic: 'pending-orders', fromBeginning: true });

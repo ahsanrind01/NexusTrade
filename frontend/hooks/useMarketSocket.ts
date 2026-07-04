@@ -36,6 +36,8 @@ export function useMarketSocket() {
       transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 3000,
+      reconnectionDelayMax: 15000,
+      timeout: 10000,
     });
     socketRef.current = socket;
 
@@ -52,18 +54,24 @@ export function useMarketSocket() {
     // them rather than relying solely on the socket being discarded.
     const handleConnect = () => setConnected(true);
     const handleDisconnect = () => setConnected(false);
+    const handleConnectError = () => setConnected(false);
+    const handleReconnect = () => setConnected(true);
 
     // The hot path. Every incoming tick just overwrites this symbol's
     // entry in the buffer — an O(1) property write, nothing reactive.
     // No Zustand call, no re-render, regardless of how fast messages
     // arrive.
     const handlePriceUpdate = (data: { asset: string; price: number }) => {
+      if (!data?.asset || !Number.isFinite(data.price)) return;
       pendingPrices[data.asset] = data.price;
     };
 
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
+    socket.on('connect_error', handleConnectError);
+    socket.io.on('reconnect', handleReconnect);
     socket.on('global-price-update', handlePriceUpdate);
+    socket.on('price-update', handlePriceUpdate);
 
     // Batch-flush loop: on a fixed cadence, drain whatever accumulated in
     // the buffer since the last tick and push it into the store.
@@ -101,7 +109,10 @@ export function useMarketSocket() {
       // cleanup regardless of how the socket instance is torn down.
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
+      socket.off('connect_error', handleConnectError);
+      socket.io.off('reconnect', handleReconnect);
       socket.off('global-price-update', handlePriceUpdate);
+      socket.off('price-update', handlePriceUpdate);
 
       socket.disconnect();
       socketRef.current = null;

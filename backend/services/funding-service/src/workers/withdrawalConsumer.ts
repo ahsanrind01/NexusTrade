@@ -2,6 +2,7 @@ import { Kafka } from 'kafkajs';
 import { db } from '../config/db';
 import { fundingTransactions } from '../db/schema';
 import { eq } from 'drizzle-orm';
+import { ensureKafkaTopics } from '../../../../shared/src/kafka/bootstrapTopics';
 
 const kafka = new Kafka({
   clientId: 'funding-service',
@@ -12,6 +13,10 @@ const consumer = kafka.consumer({ groupId: 'funding-withdrawal-group' });
 
 export const startWithdrawalConsumer = async () => {
   try {
+    await ensureKafkaTopics('funding-service', [
+      'withdrawal-validated',
+      'withdrawal-rejected',
+    ]);
     await consumer.connect();
     
     await consumer.subscribe({ topic: 'withdrawal-validated', fromBeginning: true });

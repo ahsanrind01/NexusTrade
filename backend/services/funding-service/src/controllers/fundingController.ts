@@ -4,6 +4,7 @@ import { fundingTransactions } from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getKafkaProducer } from '../config/kafka';
+import { stripe } from '../config/stripe';
 
 
 //THE INTENT (PENDING)
@@ -11,19 +12,37 @@ import { getKafkaProducer } from '../config/kafka';
 export const createDepositIntent = async (req: Request, res: Response) => {
   try {
     const { asset, amount, type } = req.body;
-    
 
-    const userId = req.headers['x-user-id'] as string ;
+    const userId = req.headers['x-user-id'] as string;
 
     if (!asset || !amount || !type) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
-    let externalTxId = null;
-    let cryptoAddress = null;
+    let externalTxId: string | null = null;
+    let cryptoAddress: string | null = null;
+    let stripeClientSecret: string | null = null;
 
     if (type === 'FIAT_STRIPE') {
-      externalTxId = `cs_test_${uuidv4()}`; 
+      const unitAmount = Math.round(Number(amount) * 100); // convert to cents
+
+      if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
+        return res.status(400).json({ success: false, error: 'Invalid amount for FIAT_STRIPE deposit' });
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: unitAmount,
+        currency: 'usd',
+        automatic_payment_methods: { enabled: true },
+        metadata: {
+          userId: userId || '',
+          asset,
+          amount: String(amount),
+        },
+      });
+
+      externalTxId = paymentIntent.id;
+      stripeClientSecret = paymentIntent.client_secret;
     } else if (type === 'CRYPTO_ETH') {
       cryptoAddress = '0xMockDepositWalletAddressForUserEth' + uuidv4().substring(0, 6);
     }
@@ -50,7 +69,7 @@ export const createDepositIntent = async (req: Request, res: Response) => {
         type: newTx.type,
         amount: newTx.amount,
         asset: newTx.asset,
-        stripeCheckoutUrl: type === 'FIAT_STRIPE' ? `https://checkout.stripe.com/pay/${externalTxId}` : null,
+        stripeClientSecret,
         cryptoDepositAddress: cryptoAddress
       }
     });
@@ -82,7 +101,7 @@ export const simulateCryptoDeposit = async (req: Request, res: Response) => {
     }
 
     await db.update(fundingTransactions)
-      .set({ 
+      .set({
         status: 'COMPLETED',
         updatedAt: new Date()
       })
@@ -124,9 +143,9 @@ export const simulateCryptoDeposit = async (req: Request, res: Response) => {
 export const createWithdrawalIntent = async (req: Request, res: Response) => {
   try {
     const { asset, amount, type, destinationAddress } = req.body;
-    
 
-    const userId = req.headers['x-user-id'] as string; 
+
+    const userId = req.headers['x-user-id'] as string;
 
     if (!asset || !amount || !type) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
@@ -143,14 +162,14 @@ export const createWithdrawalIntent = async (req: Request, res: Response) => {
       type,
       asset: asset.toLowerCase(),
       amount,
-      cryptoAddress: destinationAddress || null, 
+      cryptoAddress: destinationAddress || null,
       status: 'PENDING'
     }).returning();
 
     console.log(`[Funding Service] Withdrawal Intent Saved: ${newTx.id} | Status: PENDING`);
 
     const producer = await getKafkaProducer();
-    
+
     const kafkaPayload = {
       eventId: `withdraw-req-${newTx.id}`,
       transactionId: newTx.id,
