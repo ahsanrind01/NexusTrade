@@ -16,8 +16,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
 import {
-  useProfile, useUpdateProfile, useChangePassword,
-  useSendPhoneOtp, useVerifyPhoneOtp, useLogout,
+  useProfile, useUpdateProfile, useChangePassword, useLogout,
 } from '../../hooks/useProfile';
 
 let BlurView: any = null;
@@ -132,17 +131,6 @@ function ProviderBadge({ provider }: { provider: Provider }) {
   );
 }
 
-function VerifiedBadge({ verified }: { verified: boolean }) {
-  return (
-    <View style={[styles.badge, { borderColor: verified ? 'rgba(61,220,151,0.28)' : T.hairline }]}>
-      <Ionicons name={verified ? 'checkmark-circle' : 'ellipse-outline'} size={12} color={verified ? T.gain : T.textTer} />
-      <Text style={[styles.badgeText, { color: verified ? T.gain : T.textTer }]}>
-        {verified ? 'Phone Verified' : 'Phone Unverified'}
-      </Text>
-    </View>
-  );
-}
-
 function InfoRow({ icon, label, value, valueColor, isLast }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; valueColor?: string; isLast?: boolean }) {
   return (
     <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
@@ -197,11 +185,11 @@ function SheetModal({ visible, onClose, title, children }: { visible: boolean; o
   );
 }
 
-function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType, placeholder }: any) {
+function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType, placeholder, editable = true }: any) {
   return (
     <View style={{ marginBottom: 14 }}>
       <Text style={styles.sheetInputLabel}>{label}</Text>
-      <View style={styles.sheetInputBox}>
+      <View style={[styles.sheetInputBox, !editable && styles.sheetInputBoxDisabled]}>
         <TextInput
           style={styles.sheetInputText}
           value={value}
@@ -211,6 +199,7 @@ function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType,
           placeholder={placeholder}
           placeholderTextColor={T.textTer}
           autoCapitalize="none"
+          editable={editable}
         />
       </View>
     </View>
@@ -250,8 +239,6 @@ export default function Profile() {
   const { profile: user, isLoading: profileLoading } = useProfile();
   const updateProfileMutation = useUpdateProfile();
   const changePasswordMutation = useChangePassword();
-  const sendOtpMutation = useSendPhoneOtp();
-  const verifyOtpMutation = useVerifyPhoneOtp();
   const logoutMutation = useLogout();
 
   const profile = useMemo(() => ({
@@ -259,8 +246,6 @@ export default function Profile() {
     name: user?.name ?? 'Trader',
     email: user?.email ?? '',
     provider: (user?.provider ?? 'LOCAL') as Provider,
-    phoneNumber: user?.phoneNumber ?? null,
-    phoneVerified: user?.phoneVerified ?? false,
     createdAt: user?.createdAt ?? new Date().toISOString(),
   }), [user]);
 
@@ -268,18 +253,11 @@ export default function Profile() {
 
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState(profile.name);
-  const [editEmail, setEditEmail] = useState(profile.email);
 
   const [pwdVisible, setPwdVisible] = useState(false);
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [confirmPwd, setConfirmPwd] = useState('');
-
-  const [phoneVisible, setPhoneVisible] = useState(false);
-  const [phoneStep, setPhoneStep] = useState<'enter' | 'otp'>('enter');
-  const [phoneInput, setPhoneInput] = useState(profile.phoneNumber ?? '');
-  const [otpInput, setOtpInput] = useState('');
-  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
 
   const memberSince = useMemo(() => {
     const d = new Date(profile.createdAt);
@@ -293,31 +271,33 @@ export default function Profile() {
 
   const openEdit = useCallback(() => {
     setEditName(profile.name);
-    setEditEmail(profile.email);
     setEditVisible(true);
-  }, [profile.name, profile.email]);
+  }, [profile.name]);
 
   const openPassword = useCallback(() => setPwdVisible(true), []);
 
-  const openPhone = useCallback(() => {
-    setPhoneInput(profile.phoneNumber ?? '');
-    setPhoneStep('enter');
-    setDevOtpHint(null);
-    setPhoneVisible(true);
-  }, [profile.phoneNumber]);
+  const goToTerms = useCallback(() => {
+    setSettingsVisible(false);
+    router.push('/legal/terms');
+  }, [router]);
+
+  const goToPrivacy = useCallback(() => {
+    setSettingsVisible(false);
+    router.push('/legal/privacy');
+  }, [router]);
 
   const handleSaveProfile = useCallback(() => {
-    if (!editName.trim() || !editEmail.trim()) {
-      return Alert.alert('Missing Fields', 'Name and email cannot be empty.');
+    if (!editName.trim()) {
+      return Alert.alert('Missing Field', 'Name cannot be empty.');
     }
     updateProfileMutation.mutate(
-      { name: editName.trim(), email: editEmail.trim() },
+      { name: editName.trim() },
       {
         onSuccess: () => setEditVisible(false),
         onError: (err: any) => Alert.alert('Update Failed', err.response?.data?.error || 'Something went wrong'),
       }
     );
-  }, [editName, editEmail, updateProfileMutation]);
+  }, [editName, updateProfileMutation]);
 
   const handleChangePassword = useCallback(() => {
     if (!currentPwd || !newPwd || !confirmPwd) {
@@ -338,45 +318,6 @@ export default function Profile() {
     );
   }, [currentPwd, newPwd, confirmPwd, changePasswordMutation]);
 
-  const handleSendOtp = useCallback(() => {
-    const cleaned = phoneInput.trim();
-    if (!cleaned) return Alert.alert('Missing Field', 'Enter a phone number first.');
-    if (!cleaned.startsWith('+')) {
-      return Alert.alert('Include Country Code', 'Enter your number with a country code, e.g. +923001234567.');
-    }
-    setDevOtpHint(null);
-    sendOtpMutation.mutate(cleaned, {
-      onSuccess: (data: any) => {
-        setPhoneStep('otp');
-        if (data?.otp) setDevOtpHint(String(data.otp));
-      },
-      onError: (err: any) => Alert.alert('Failed to Send Code', err.response?.data?.error || 'Something went wrong'),
-    });
-  }, [phoneInput, sendOtpMutation]);
-
-  const handleVerifyOtp = useCallback(() => {
-    if (!otpInput.trim()) return Alert.alert('Missing Field', 'Enter the code we sent you.');
-    verifyOtpMutation.mutate(
-      { phone: phoneInput.trim(), otp: otpInput.trim() },
-      {
-        onSuccess: () => {
-          setPhoneVisible(false);
-          setPhoneStep('enter');
-          setOtpInput('');
-          setDevOtpHint(null);
-        },
-        onError: (err: any) => Alert.alert('Verification Failed', err.response?.data?.error || 'Something went wrong'),
-      }
-    );
-  }, [phoneInput, otpInput, verifyOtpMutation]);
-
-  const closePhoneSheet = useCallback(() => {
-    setPhoneVisible(false);
-    setPhoneStep('enter');
-    setOtpInput('');
-    setDevOtpHint(null);
-  }, []);
-
   const handleLogout = useCallback(() => {
     Alert.alert('Log Out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
@@ -386,8 +327,6 @@ export default function Profile() {
 
   const saving = updateProfileMutation.isPending;
   const changingPwd = changePasswordMutation.isPending;
-  const sendingOtp = sendOtpMutation.isPending;
-  const verifyingOtp = verifyOtpMutation.isPending;
 
   return (
     <View style={styles.root}>
@@ -427,7 +366,6 @@ export default function Profile() {
 
               <View style={styles.badgeRow}>
                 <ProviderBadge provider={profile.provider} />
-                <VerifiedBadge verified={profile.phoneVerified} />
               </View>
             </View>
 
@@ -454,14 +392,7 @@ export default function Profile() {
           <SectionLabel text="Personal Information" />
           <GlassPanel style={styles.infoPanel} intensity={24}>
             <InfoRow icon="person-outline" label="Full Name" value={profile.name} />
-            <InfoRow icon="mail-outline" label="Email Address" value={profile.email} />
-            <InfoRow
-              icon="call-outline"
-              label="Phone Number"
-              value={profile.phoneNumber ?? 'Not added'}
-              valueColor={profile.phoneVerified ? T.gain : undefined}
-              isLast
-            />
+            <InfoRow icon="mail-outline" label="Email Address" value={profile.email} isLast />
           </GlassPanel>
         </Animated.View>
 
@@ -472,18 +403,21 @@ export default function Profile() {
               icon="lock-closed-outline"
               label="Password"
               value={profile.provider === 'LOCAL' ? 'Set' : 'Managed by Google'}
-            />
-            <InfoRow
-              icon="shield-checkmark-outline"
-              label="Two-Step Verification"
-              value={profile.phoneVerified ? 'Enabled' : 'Not enabled'}
-              valueColor={profile.phoneVerified ? T.gain : undefined}
               isLast
             />
           </GlassPanel>
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(230).springify().damping(16)} style={{ marginTop: 6 }}>
+        <Animated.View entering={FadeInDown.delay(220).springify().damping(16)}>
+          <SectionLabel text="Legal" />
+          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <SettingsMenuRow icon="document-text-outline" label="Terms & Conditions" onPress={goToTerms} />
+            <View style={styles.menuRowDivider} />
+            <SettingsMenuRow icon="shield-outline" label="Privacy Policy" onPress={goToPrivacy} />
+          </GlassPanel>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(250).springify().damping(16)} style={{ marginTop: 6 }}>
           <Pressy onPress={handleLogout}>
             <GlassPanel style={styles.logoutPanel} intensity={20}>
               <Ionicons name="log-out-outline" size={17} color={T.loss} />
@@ -494,7 +428,7 @@ export default function Profile() {
       </ScrollView>
 
       <SheetModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} title="Account Settings">
-        <SettingsMenuRow icon="person-outline" label="Edit Profile" sublabel="Name and email address" onPress={() => openFromMenu(openEdit)} />
+        <SettingsMenuRow icon="person-outline" label="Edit Profile" sublabel="Update your display name" onPress={() => openFromMenu(openEdit)} />
         <SettingsMenuRow
           icon="lock-closed-outline"
           label="Change Password"
@@ -502,12 +436,14 @@ export default function Profile() {
           onPress={() => openFromMenu(openPassword)}
           disabled={profile.provider === 'GOOGLE'}
         />
-        <SettingsMenuRow icon="call-outline" label="Phone Number" sublabel={profile.phoneNumber ? 'Update or re-verify' : 'Add and verify a number'} onPress={() => openFromMenu(openPhone)} />
+        <SettingsMenuRow icon="document-text-outline" label="Terms & Conditions" onPress={goToTerms} />
+        <SettingsMenuRow icon="shield-outline" label="Privacy Policy" onPress={goToPrivacy} />
       </SheetModal>
 
       <SheetModal visible={editVisible} onClose={() => setEditVisible(false)} title="Edit Profile">
         <SheetInput label="Full Name" value={editName} onChangeText={setEditName} placeholder="Your name" />
-        <SheetInput label="Email Address" value={editEmail} onChangeText={setEditEmail} placeholder="you@example.com" keyboardType="email-address" />
+        <SheetInput label="Email Address" value={profile.email} onChangeText={() => {}} editable={false} />
+        <Text style={styles.sheetHint}>Your email address is your account identifier and can't be changed here. Contact support if you need to update it.</Text>
         <SheetPrimaryButton label="Save Changes" onPress={handleSaveProfile} loading={saving} />
       </SheetModal>
 
@@ -517,28 +453,6 @@ export default function Profile() {
         <SheetInput label="Confirm New Password" value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry placeholder="••••••••" />
         <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number and a symbol.</Text>
         <SheetPrimaryButton label="Update Password" onPress={handleChangePassword} loading={changingPwd} />
-      </SheetModal>
-
-      <SheetModal visible={phoneVisible} onClose={closePhoneSheet} title={phoneStep === 'enter' ? 'Add Phone Number' : 'Verify Code'}>
-        {phoneStep === 'enter' ? (
-          <>
-            <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+923001234567" keyboardType="phone-pad" />
-            <Text style={styles.sheetHint}>Include your country code, starting with a plus sign.</Text>
-            <SheetPrimaryButton label="Send Code" onPress={handleSendOtp} loading={sendingOtp} />
-          </>
-        ) : (
-          <>
-            <Text style={styles.sheetHint}>We sent a 6-digit code to {phoneInput}.</Text>
-            {devOtpHint && (
-              <View style={styles.devHintBox}>
-                <Ionicons name="information-circle-outline" size={14} color={T.gold} />
-                <Text style={styles.devHintText}>Development code: {devOtpHint}</Text>
-              </View>
-            )}
-            <SheetInput label="Verification Code" value={otpInput} onChangeText={setOtpInput} placeholder="••••••" keyboardType="number-pad" />
-            <SheetPrimaryButton label="Verify Phone" onPress={handleVerifyOtp} loading={verifyingOtp} />
-          </>
-        )}
       </SheetModal>
     </View>
   );
@@ -589,6 +503,8 @@ const styles = StyleSheet.create({
   infoLabel: { fontSize: 13, fontFamily: FontFamily.bodyMedium, color: T.textSec },
   infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, maxWidth: '48%', textAlign: 'right' },
 
+  menuRowDivider: { height: 1, backgroundColor: T.hairline },
+
   logoutPanel: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.2)', paddingVertical: 16 },
   logoutText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
 
@@ -600,11 +516,9 @@ const styles = StyleSheet.create({
 
   sheetInputLabel: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.4, marginBottom: 7 },
   sheetInputBox: { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14 },
+  sheetInputBoxDisabled: { opacity: 0.5 },
   sheetInputText: { fontSize: 14, fontFamily: FontFamily.body, color: T.textPri, paddingVertical: 13 },
   sheetHint: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, lineHeight: 16, marginBottom: 14 },
-
-  devHintBox: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(232,182,86,0.1)', borderWidth: 1, borderColor: 'rgba(232,182,86,0.24)', borderRadius: 10, paddingHorizontal: 11, paddingVertical: 9, marginBottom: 14 },
-  devHintText: { fontSize: 11.5, fontFamily: FontFamily.bodyMedium, color: T.gold },
 
   sheetPrimaryBtn: { height: 50, borderRadius: 15, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
   sheetPrimaryBtnText: { fontSize: 14, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 0.2 },

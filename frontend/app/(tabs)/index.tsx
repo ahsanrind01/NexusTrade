@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Dimensions, TextInput, KeyboardAvoidingView, Platform,
-  ListRenderItemInfo,
+  ListRenderItemInfo, Alert,
 } from 'react-native';
 import Animated, {
   FadeIn, FadeInDown, FadeInUp,
@@ -20,6 +20,10 @@ import { useMarketSocket } from '../../hooks/useMarketSocket';
 import { useTicker24h } from '../../hooks/useTicker24h';
 import { useWallet } from '../../hooks/useWallet';
 import { useWalletStore } from '../../stores/walletStore';
+import { useMyOrders } from '../../hooks/useOrders';
+import { useOrderStore } from '../../stores/orderStore';
+import { useFundingHistory } from '../../hooks/useFunding';
+import { useFundingStore, FundingTransaction } from '../../stores/fundingStore';
 
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
@@ -56,7 +60,6 @@ const T = {
   textTer: '#60657A',
 };
 
-const PERIODS = ['1D', '1W', '1M', '3M', 'ALL'];
 const AI_SIGNALS = [
   { l: 'BTC Momentum', v: 'Strong ↑', c: T.gain },
   { l: 'Fear / Greed', v: '38',       c: T.gold },
@@ -107,13 +110,16 @@ const PriceFlash = memo(function PriceFlash({ price, positive }: { price: string
   );
 }, (p, n) => p.price === n.price && p.positive === n.positive);
 
-const Sparkline = memo(function Sparkline({ points, positive }: { points: number[]; positive: boolean }) {
+// width/height are now props (defaulted to the original asset-row size) so
+// the same component can be reused, larger, for the real portfolio chart.
+const Sparkline = memo(function Sparkline({
+  points, positive, width: w = 58, height: h = 34,
+}: { points: number[]; positive: boolean; width?: number; height?: number }) {
   const segments = useMemo(() => {
     if (points.length < 2) return null;
     const max = Math.max(...points);
     const min = Math.min(...points);
     const range = max - min || 1;
-    const h = 34, w = 58;
     const step = w / (points.length - 1);
     return points.slice(0, -1).map((p, i) => {
       const x1 = i * step;
@@ -124,12 +130,12 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
       return { x1, y1, length, angle, opacity: 0.4 + (i / points.length) * 0.6 };
     });
-  }, [points]);
+  }, [points, w, h]);
 
-  if (!segments) return <View style={styles.sparklinePlaceholder} />;
+  if (!segments) return <View style={{ width: w, height: h }} />;
   const color = positive ? T.gain : T.loss;
   return (
-    <View style={{ width: 58, height: 34 }}>
+    <View style={{ width: w, height: h }}>
       {segments.map((s, i) => (
         <View key={i} style={{
           position: 'absolute', left: s.x1, top: s.y1,
@@ -142,7 +148,7 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       ))}
     </View>
   );
-}, (p, n) => p.points === n.points && p.positive === n.positive);
+}, (p, n) => p.points === n.points && p.positive === n.positive && p.width === n.width && p.height === n.height);
 
 function AmbientField() {
   const drift = useSharedValue(0);
@@ -167,13 +173,45 @@ function AmbientField() {
   );
 }
 
-const PortfolioCard = memo(function PortfolioCard() {
-  const [activePeriod, setActivePeriod] = useState(0);
+// Builds a cumulative net-deposit series from real funding transactions
+// (completed deposits add, completed withdrawals subtract), sorted oldest
+// to newest. This replaces the old Math.random() bar chart — it's real
+// account activity, not a mock, though it's a proxy for portfolio value
+// (deposits net of withdrawals) rather than a live mark-to-market curve,
+// since the backend doesn't yet persist historical portfolio valuations.
+function usePortfolioSeries(transactions: FundingTransaction[]) {
+  return useMemo(() => {
+    const completed = transactions
+      .filter((t) => t.status === 'COMPLETED')
+      .slice()
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    if (completed.length === 0) return { points: [] as number[], hasData: false };
+
+    let running = 0;
+    const points = completed.map((t) => {
+      const amt = parseFloat(t.amount) || 0;
+      running += t.direction === 'DEPOSIT' ? amt : -amt;
+      return running;
+    });
+
+    // Cap to the most recent 12 points so the chart stays readable.
+    const trimmed = points.length > 12 ? points.slice(-12) : points;
+    return { points: trimmed, hasData: trimmed.length >= 2 };
+  }, [transactions]);
+}
+
+const PortfolioCard = memo(function PortfolioCard({
+  openOrdersCount, totalDeposited, series, hasSeriesData,
+}: {
+  openOrdersCount: number;
+  totalDeposited: number;
+  series: number[];
+  hasSeriesData: boolean;
+}) {
   const totalUsd = useWalletStore((s) => s.totalUsd);
   const balances = useWalletStore((s) => s.balances);
   const { isLoading } = useWallet();
-
-  const BARS = [28, 40, 36, 56, 42, 68, 52, 64, 48, 80, 66, 100];
 
   const formattedTotal = totalUsd.toLocaleString('en-US', {
     minimumFractionDigits: 2,
@@ -181,6 +219,7 @@ const PortfolioCard = memo(function PortfolioCard() {
   });
 
   const assetCount = Object.keys(balances).length;
+  const seriesPositive = series.length < 2 || series[series.length - 1] >= series[0];
 
   return (
     <Animated.View entering={FadeInDown.delay(70).springify().damping(16)} style={styles.heroWrap}>
@@ -206,78 +245,67 @@ const PortfolioCard = memo(function PortfolioCard() {
             {isLoading && totalUsd === 0 ? (
               <View style={styles.skeletonValue} />
             ) : (
-              <Text style={styles.heroValue}>${formattedTotal}</Text>
+              // adjustsFontSizeToFit + numberOfLines=1: large balances used to
+              // wrap onto a second line here. Now the value shrinks to fit
+              // one line instead, down to 60% of the base font size.
+              <Text
+                style={styles.heroValue}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                ${formattedTotal}
+              </Text>
             )}
-            <View style={styles.heroDeltaRow}>
-              <View style={styles.deltaChip}>
-                <Text style={styles.heroDelta}>
-                  {assetCount > 0 ? `${assetCount} assets` : 'No assets'}
-                </Text>
-              </View>
+            <View style={styles.deltaChip}>
+              <Text style={styles.heroDelta}>
+                {assetCount > 0 ? `${assetCount} asset${assetCount === 1 ? '' : 's'}` : 'No assets yet'}
+              </Text>
             </View>
           </View>
           <View style={styles.heroStatsCol}>
             <View style={styles.heroStatItem}>
               <Text style={styles.heroStatLabel}>USDT</Text>
-              <Text style={[styles.heroStatValue, { color: T.gain }]}>
+              <Text style={[styles.heroStatValue, { color: T.gain }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                 {balances['USDT'] ? `$${balances['USDT'].toFixed(2)}` : '—'}
               </Text>
             </View>
             <View style={[styles.heroStatItem, { marginTop: 14 }]}>
               <Text style={styles.heroStatLabel}>BTC</Text>
-              <Text style={[styles.heroStatValue, { color: T.accent }]}>
+              <Text style={[styles.heroStatValue, { color: T.accent }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                 {balances['BTC'] ? balances['BTC'].toFixed(6) : '—'}
               </Text>
             </View>
           </View>
         </View>
 
-        <View style={styles.barsRow}>
-          {BARS.map((h, i) => {
-            const last = i === BARS.length - 1;
-            return (
-              <Animated.View key={i} entering={FadeInUp.delay(140 + i * 18).springify()} style={styles.barCol}>
-                <LinearGradient
-                  colors={last ? [T.violet, T.accent] : [T.accent + '00', T.accent + Math.round((0.08 + (i / BARS.length) * 0.34) * 255).toString(16).padStart(2, '0')]}
-                  start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
-                  style={[styles.bar, { height: (h / 100) * 50 }]}
-                />
-              </Animated.View>
-            );
-          })}
+        {/* Real chart: cumulative net deposits, built from GET /funding/transactions. */}
+        <View style={styles.chartRow}>
+          {hasSeriesData ? (
+            <Sparkline points={series} positive={seriesPositive} width={width - 76} height={54} />
+          ) : (
+            <View style={styles.chartEmpty}>
+              <Text style={styles.chartEmptyText}>No deposit activity yet — fund your account to see it here</Text>
+            </View>
+          )}
         </View>
-
-        <View style={styles.periodRow}>
-          {PERIODS.map((p, i) => (
-            <TouchableOpacity
-              key={p}
-              onPress={() => setActivePeriod(i)}
-              style={[styles.periodBtn, activePeriod === i && styles.periodBtnActive]}
-            >
-              {activePeriod === i && (
-                <LinearGradient
-                  colors={[T.accentDeep, T.violet]}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={StyleSheet.absoluteFill}
-                />
-              )}
-              <Text style={[styles.periodText, activePeriod === i && styles.periodTextActive]}>{p}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <Text style={styles.chartCaption}>
+          {hasSeriesData ? 'Net deposits over your recent activity' : ' '}
+        </Text>
 
         <View style={styles.heroDivider} />
 
         <View style={styles.statsStrip}>
           {[
-            { l: 'TOTAL VALUE',  v: `$${formattedTotal}`,       c: undefined },
-            { l: 'ASSETS',       v: `${assetCount}`,             c: T.accent  },
-            { l: 'USDT BAL',     v: balances['USDT'] ? `$${balances['USDT'].toFixed(0)}` : '—', c: T.gain },
-            { l: 'BTC BAL',      v: balances['BTC']  ? balances['BTC'].toFixed(5)  : '—', c: T.gold },
+            { l: 'ASSETS',       v: `${assetCount}`,  c: T.accent },
+            { l: 'OPEN ORDERS',  v: `${openOrdersCount}`, c: T.gold },
+            { l: 'DEPOSITED',    v: `$${totalDeposited.toLocaleString('en-US', { maximumFractionDigits: 0 })}`, c: T.gain },
           ].map((s, i) => (
             <View key={s.l} style={[styles.statCell, i > 0 && styles.statCellDivider]}>
               <Text style={styles.statCellLabel}>{s.l}</Text>
-              <Text style={[styles.statCellValue, s.c ? { color: s.c } : {}]}>{s.v}</Text>
+              <Text style={[styles.statCellValue, s.c ? { color: s.c } : {}]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                {s.v}
+              </Text>
             </View>
           ))}
         </View>
@@ -286,7 +314,9 @@ const PortfolioCard = memo(function PortfolioCard() {
   );
 });
 
-const ActionButton = memo(function ActionButton({ label, icon, color }: { label: string; icon: string; color: string }) {
+const ActionButton = memo(function ActionButton({
+  label, icon, color, onPress,
+}: { label: string; icon: string; color: string; onPress: () => void }) {
   const press = useSharedValue(0);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.9]) }] }));
   const glowStyle = useAnimatedStyle(() => ({ opacity: interpolate(press.value, [0, 1], [0, 1]) }));
@@ -296,6 +326,7 @@ const ActionButton = memo(function ActionButton({ label, icon, color }: { label:
         activeOpacity={1}
         onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
         onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
+        onPress={onPress}
         style={{ alignItems: 'center' }}
       >
         <View style={styles.actionIconShell}>
@@ -309,14 +340,34 @@ const ActionButton = memo(function ActionButton({ label, icon, color }: { label:
 });
 
 const QuickActions = memo(function QuickActions() {
+  const router = useRouter();
+
+  // Add Funds / Withdraw deep-link into the Wallet screen's existing
+  // deposit/withdraw modal (see app/(tabs)/wallet.tsx's `action` param
+  // handling). Trade goes straight to the trading terminal. Transfer has
+  // no backend endpoint yet (funding-service only supports deposit/
+  // withdraw), so it's flagged honestly instead of silently doing nothing.
+  const handleAddFunds = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'deposit' } });
+  }, [router]);
+  const handleWithdraw = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'withdraw' } });
+  }, [router]);
+  const handleTrade = useCallback(() => {
+    router.push('/(tabs)/trade');
+  }, [router]);
+  const handleTransfer = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'transfer' } });
+  }, [router]);
+
   return (
     <Animated.View entering={FadeInDown.delay(150).springify().damping(16)} style={styles.actionsPanelWrap}>
       <GlassPanel style={styles.actionsPanel} intensity={24}>
         <View style={styles.actionsRow}>
-          <ActionButton label="Add Funds" icon="＋" color={T.gain} />
-          <ActionButton label="Withdraw"  icon="↑"  color={T.loss} />
-          <ActionButton label="Trade"     icon="⇄"  color={T.accent} />
-          <ActionButton label="Transfer"  icon="→"  color={T.violet} />
+          <ActionButton label="Add Funds" icon="＋" color={T.gain} onPress={handleAddFunds} />
+          <ActionButton label="Withdraw"  icon="↑"  color={T.loss} onPress={handleWithdraw} />
+          <ActionButton label="Trade"     icon="⇄"  color={T.accent} onPress={handleTrade} />
+          <ActionButton label="Transfer"  icon="→"  color={T.violet} onPress={handleTransfer} />
         </View>
       </GlassPanel>
     </Animated.View>
@@ -438,6 +489,30 @@ export default function Home() {
   useMarketSocket();
   useTicker24h(TOP_5);
 
+  // Populate orderStore/fundingStore so the portfolio card can show real
+  // open-orders / deposit stats and chart, even if the user hasn't visited
+  // the Trade or Wallet tabs yet this session.
+  useMyOrders();
+  useFundingHistory();
+  const orders = useOrderStore((s) => s.orders);
+  const transactions = useFundingStore((s) => s.transactions);
+
+  const openOrdersCount = useMemo(
+    () => orders.filter((o) => o.status === 'PENDING' || o.status === 'PARTIAL').length,
+    [orders]
+  );
+  const totalDeposited = useMemo(
+    () => transactions
+      .filter((t) => t.direction === 'DEPOSIT' && t.status === 'COMPLETED')
+      .reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0),
+    [transactions]
+  );
+  const hasRecentActivity = useMemo(
+    () => transactions.some((t) => Date.now() - new Date(t.createdAt).getTime() < 1000 * 60 * 60 * 24),
+    [transactions]
+  );
+  const { points: portfolioSeries, hasData: hasSeriesData } = usePortfolioSeries(transactions);
+
   const greeting = useMemo(() => {
     const h = new Date().getHours();
     if (h < 12) return 'Good morning';
@@ -464,6 +539,13 @@ export default function Home() {
 
   const keyExtractor = useCallback((item: any) => item.symbol, []);
 
+  // Bell now opens the Wallet tab's activity/history section (real
+  // destination, real data) instead of doing nothing. The dot only lights
+  // up when there's genuine activity in the last 24h.
+  const handleNotifPress = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'history' } });
+  }, [router]);
+
   const ListHeader = useMemo(() => (
     <>
       <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
@@ -472,20 +554,28 @@ export default function Home() {
           <Text style={styles.userName}>{user?.name ?? 'Trader'}</Text>
         </View>
         <View style={styles.topRight}>
-          <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.32)' : 'rgba(255,107,122,0.32)' }]}>
+          <View style={[
+            styles.statusPill,
+            connected ? styles.statusPillLive : styles.statusPillOffline,
+          ]}>
             <PulseDot color={connected ? T.gain : T.loss} />
             <Text style={[styles.statusText, { color: connected ? T.gain : T.loss }]}>
               {connected ? 'LIVE' : 'OFFLINE'}
             </Text>
           </View>
-          <TouchableOpacity style={styles.notifBtn}>
-            <View style={styles.notifDot} />
+          <TouchableOpacity style={styles.notifBtn} onPress={handleNotifPress} activeOpacity={0.75}>
+            {hasRecentActivity && <View style={styles.notifDot} />}
             <Text style={styles.notifIcon}>◉</Text>
           </TouchableOpacity>
         </View>
       </Animated.View>
 
-      <PortfolioCard />
+      <PortfolioCard
+        openOrdersCount={openOrdersCount}
+        totalDeposited={totalDeposited}
+        series={portfolioSeries}
+        hasSeriesData={hasSeriesData}
+      />
       <QuickActions />
       <AIInsightCard />
 
@@ -503,7 +593,7 @@ export default function Home() {
         <Text style={styles.listHeaderText}>Price</Text>
       </View>
     </>
-  ), [greeting, user?.name, connected]);
+  ), [greeting, user?.name, connected, handleNotifPress, hasRecentActivity, openOrdersCount, totalDeposited, portfolioSeries, hasSeriesData, router]);
 
   const ListEmpty = useMemo(() => (
     <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
@@ -546,8 +636,23 @@ const styles = StyleSheet.create({
   greeting: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6 },
   userName: { fontSize: 24, fontFamily: FontFamily.heading, color: T.textPri, marginTop: 4, letterSpacing: -0.4 },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.035)' },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 13, paddingVertical: 8, borderRadius: 20,
+    borderWidth: 1,
+  },
+  // Distinct, slightly punchier looks for live vs offline instead of one
+  // plain grey pill with a barely-visible border in both states.
+  statusPillLive: {
+    backgroundColor: 'rgba(61,220,151,0.10)',
+    borderColor: 'rgba(61,220,151,0.34)',
+    shadowColor: T.gain, shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
+  statusPillOffline: {
+    backgroundColor: 'rgba(255,107,122,0.08)',
+    borderColor: 'rgba(255,107,122,0.3)',
+  },
+  statusText: { fontSize: 9.5, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
   notifBtn: { width: 40, height: 40, borderRadius: 14, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   notifDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: T.loss, position: 'absolute', top: 8, right: 8, borderWidth: 1.5, borderColor: T.bg0, zIndex: 1 },
   notifIcon: { fontSize: 16, color: T.textSec },
@@ -555,27 +660,23 @@ const styles = StyleSheet.create({
   heroWrap: { marginBottom: 18, borderRadius: 28, shadowColor: T.accentDeep, shadowOpacity: 0.32, shadowRadius: 34, shadowOffset: { width: 0, height: 14 }, elevation: 12 },
   heroPanel: { borderRadius: 28, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
   heroInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 27, borderTopRightRadius: 27 },
-  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
   liveTag: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: T.gainDim, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, alignSelf: 'flex-start', marginBottom: 11, borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)' },
   liveTagText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 1.5 },
-  heroValue: { fontSize: 40, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.4 },
-  heroDeltaRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 9 },
-  heroDelta: { fontSize: 14, fontFamily: FontFamily.heading, color: T.gain },
-  heroDeltaPct: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
-  heroStatsCol: { alignItems: 'flex-end' },
-  heroStatItem: { alignItems: 'flex-end' },
+  // Fixed line-height/height so adjustsFontSizeToFit has one predictable
+  // box to shrink into, instead of the balance re-flowing onto a 2nd line.
+  heroValue: { fontSize: 40, lineHeight: 46, height: 46, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.4, maxWidth: width * 0.55 },
+  heroDelta: { fontSize: 11.5, fontFamily: FontFamily.heading, color: T.gain },
+  heroStatsCol: { alignItems: 'flex-end', maxWidth: width * 0.32 },
+  heroStatItem: { alignItems: 'flex-end', width: '100%' },
   heroStatLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.9, marginBottom: 4 },
   heroStatValue: { fontSize: 16, fontFamily: FontFamily.heading },
 
-  barsRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3.5, height: 56, marginBottom: 20 },
-  barCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end' },
-  bar: { width: '100%', borderRadius: 4 },
-
-  periodRow: { flexDirection: 'row', gap: 6, marginBottom: 20 },
-  periodBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: T.hairline, overflow: 'hidden' },
-  periodBtnActive: { borderColor: 'transparent', shadowColor: T.accentDeep, shadowOpacity: 0.5, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
-  periodText: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
-  periodTextActive: { color: '#fff' },
+  // Real chart row (replaces the old random bar chart)
+  chartRow: { height: 54, marginBottom: 6, alignItems: 'center', justifyContent: 'center' },
+  chartEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  chartEmptyText: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
+  chartCaption: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 18, textAlign: 'center' },
 
   heroDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 18 },
   statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
@@ -621,7 +722,6 @@ const styles = StyleSheet.create({
   assetInfo: { flex: 1 },
   assetSymbol: { fontSize: 14.5, fontFamily: FontFamily.heading, color: T.textPri },
   assetName: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2.5 },
-  sparklinePlaceholder: { width: 58, height: 34 },
   assetPriceCol: { alignItems: 'flex-end', gap: 6 },
   assetPrice: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri },
   changeBadge: { paddingHorizontal: 7.5, paddingVertical: 3, borderRadius: 7 },
@@ -632,7 +732,7 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
 
   skeletonValue: {
-    width: 190, height: 44, borderRadius: 11,
+    width: 190, height: 46, borderRadius: 11,
     backgroundColor: 'rgba(255,255,255,0.07)', marginBottom: 8,
   },
   deltaChip: {

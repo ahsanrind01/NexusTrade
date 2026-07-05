@@ -6,8 +6,7 @@
     "services/*"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev -w api-gateway\" \"npm run dev -w order-service\" \"npm run dev -w matching-engine\" \"npm run dev -w ledger-service\" \"npm run dev -w market-data-service\" \"npm run dev -w wallet-service\" \"npm run dev -w funding-service\" \"npm run dev -w notification-service\" \"npm run dev -w auth-service\"",
-    "seed:bots": "tsx scripts/seedBots.ts"
+    "dev": "concurrently \"npm run dev -w api-gateway\" \"npm run dev -w order-service\" \"npm run dev -w matching-engine\" \"npm run dev -w ledger-service\" \"npm run dev -w market-data-service\" \"npm run dev -w wallet-service\" \"npm run dev -w funding-service\" \"npm run dev -w auth-service\" \"npm run dev -w liquidity-bot-service\""
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
@@ -19,7 +18,6 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "axios": "^1.18.1",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",

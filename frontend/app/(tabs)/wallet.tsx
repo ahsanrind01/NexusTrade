@@ -65,14 +65,18 @@ const ASSET_META: Record<string, { name: string; color: string; symbol: string }
   ADA:   { name: 'Cardano',   color: '#5C7CFA', symbol: 'A' },
   DOGE:  { name: 'Dogecoin',  color: '#E0C354', symbol: 'D' },
   AVAX:  { name: 'Avalanche', color: '#F06A6E', symbol: 'A' },
+  DOT:   { name: 'Polkadot',  color: '#F25CA8', symbol: 'D' },
+  LINK:  { name: 'Chainlink', color: '#6D8DF2', symbol: 'L' },
+  NEAR:  { name: 'NEAR Protocol', color: '#5CDDB0', symbol: 'N' },
+  APT:   { name: 'Aptos',     color: '#5CECBF', symbol: 'A' },
+  INJ:   { name: 'Injective', color: '#5ECEFF', symbol: 'I' },
+  ARB:   { name: 'Arbitrum',  color: '#6FB6F2', symbol: 'A' },
 };
 
 const FIAT_ASSETS = new Set(['USDT', 'USDC']);
-const MODAL_ASSETS = ['USDT', 'BTC', 'ETH', 'BNB', 'SOL'] as const;
-const CRYPTO_ASSETS = ['BTC', 'ETH', 'BNB', 'SOL'] as const;
+const CRYPTO_ASSETS = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK', 'NEAR', 'APT', 'INJ', 'ARB'] as const;
+const MODAL_ASSETS = ['USDT', ...CRYPTO_ASSETS] as const;
 
-// Formats a raw balance for display / for prefilling the MAX button —
-// keeps small holdings from truncating to 0.00.
 function formatAssetAmount(balance: number): string {
   if (!balance || balance <= 0) return '0';
   if (balance < 0.001) return balance.toFixed(6);
@@ -245,7 +249,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
     }
   }, [visible]);
 
-  // Poll the server every 2s while we're waiting on a deposit to clear
   useEffect(() => {
     if (!processingId) return;
     const interval = setInterval(() => {
@@ -254,7 +257,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
     return () => clearInterval(interval);
   }, [processingId, refetchFundingHistory]);
 
-  // Watch the store for the processing transaction flipping to COMPLETED/FAILED
   useEffect(() => {
     if (!processingId) return;
     const tx = transactions.find((t) => t.id === processingId);
@@ -321,7 +323,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
       return;
     }
 
-    // Card was charged successfully — now wait for the webhook to clear the deposit
     setProcessingId(transactionId);
     setProcessingStatus('PENDING');
   }, [initPaymentSheet, presentPaymentSheet]);
@@ -361,7 +362,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
         const { transaction } = await createDepositIntent.mutateAsync({ asset, amount, type });
 
         if (transaction.type === 'FIAT_STRIPE' && transaction.stripeClientSecret) {
-          // Native card form opens immediately; no intermediate "intent ready" screen needed
           await startCardPayment(transaction.stripeClientSecret, transaction.id);
           return;
         }
@@ -1027,7 +1027,6 @@ export default function Wallet() {
   const marketPrices = useMarketStore((s) => s.prices);
   const ticker24h = useMarketStore((s) => s.ticker24h);
 
-  // Populates useMarketStore's ticker24h with live 24h change % from Binance.
   useTicker24h();
 
   const livePrices = useMemo(() => {
@@ -1067,9 +1066,6 @@ export default function Wallet() {
     [balances]
   );
 
-  // Total wallet PnL: sum of each holding's real 24h dollar move, derived
-  // from its current USD value and Binance's live 24h change percent
-  // (stablecoins have no listed pair, so they contribute 0 change).
   const portfolioPnl = useMemo(() => {
     let pnlUsd = 0;
     let prevTotal = 0;

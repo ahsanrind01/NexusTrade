@@ -18,7 +18,9 @@ import { useIsFocused } from '@react-navigation/native';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useAuthStore } from '../../stores/authStore';
-import { api } from '../../lib/api';
+import { useWallet } from '../../hooks/useWallet';
+import { useWalletStore } from '../../stores/walletStore';
+import { usePlaceOrder } from '../../hooks/useOrders';
 
 let BlurView: any = null;
 try {
@@ -126,8 +128,8 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28, t
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
-        <BlurView intensity={intensity} tint={tint} style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
+        <BlurView pointerEvents="none" intensity={intensity} tint={tint} style={StyleSheet.absoluteFill} />
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -609,24 +611,25 @@ function TradePanelBase({
   const [totalText, setTotalText] = useState('');
   const [activeField, setActiveField] = useState<'amount' | 'total'>('amount');
   const [limitPrice, setLimitPrice] = useState('');
-  const [balances, setBalances] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
-    if (!token) return;
-    const controller = new AbortController();
-    api.get('/wallet/balance', { signal: controller.signal as any })
-      .then((r) => { if (r.data?.success) setBalances(r.data.balance ?? {}); })
-      .catch(() => {});
-    return () => controller.abort();
-  }, [token]);
+    if (!banner) return;
+    const t = setTimeout(() => setBanner(null), 4000);
+    return () => clearTimeout(t);
+  }, [banner]);
+
+  useWallet();
+  const balances = useWalletStore((s) => s.balances);
+
+  const placeOrder = usePlaceOrder();
+  const submitting = placeOrder.isPending;
 
   const derived = useMemo(() => {
     const effectivePrice = orderType === 'MARKET' ? livePrice : (parseFloat(limitPrice) || 0);
     const baseAsset = meta.short;
-    const quoteBalance = parseFloat(balances['USDT'] ?? '0');
-    const baseBalance = parseFloat(balances[baseAsset] ?? '0');
+    const quoteBalance = balances['USDT'] ?? 0;
+    const baseBalance = balances[baseAsset] ?? 0;
     const parsedAmount = parseFloat(amountText) || 0;
     const parsedTotal = parseFloat(totalText) || 0;
     const amount = activeField === 'amount' ? parsedAmount : (effectivePrice > 0 ? parsedTotal / effectivePrice : 0);
@@ -640,6 +643,14 @@ function TradePanelBase({
 
   const displayAmount = activeField === 'amount' ? amountText : (derived.amount ? derived.amount.toFixed(6) : '');
   const displayTotal = activeField === 'total' ? totalText : (derived.total ? derived.total.toFixed(2) : '');
+  const amountEditable = orderType === 'MARKET' || derived.effectivePrice > 0;
+
+  useEffect(() => {
+    if (orderType === 'LIMIT' && !(parseFloat(limitPrice) > 0)) {
+      setAmountText('');
+      setTotalText('');
+    }
+  }, [orderType, limitPrice]);
 
   const applyPct = useCallback((pct: number) => {
     if (side === 'BUY') {
@@ -660,28 +671,26 @@ function TradePanelBase({
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
-    setSubmitting(true);
     setBanner(null);
     try {
-      const res = await api.post('/orders/place', {
+      const res = await placeOrder.mutateAsync({
         asset: symbol,
         amount: derived.amount,
         price: derived.effectivePrice,
         side,
+        type: orderType,
       });
-      if (res.data?.success) {
-        setBanner({ type: 'success', text: `${side === 'BUY' ? 'Buy' : 'Sell'} order placed · #${String(res.data.orderId).slice(0, 8)}` });
+      if (res?.success) {
+        setBanner({ type: 'success', text: `${side === 'BUY' ? 'Buy' : 'Sell'} order placed · #${String(res.orderId).slice(0, 8)}` });
         setAmountText('');
         setTotalText('');
       } else {
-        setBanner({ type: 'error', text: res.data?.error ?? 'Order failed. Please try again.' });
+        setBanner({ type: 'error', text: 'Order failed. Please try again.' });
       }
     } catch (err: any) {
       setBanner({ type: 'error', text: err.response?.data?.error ?? 'Network error placing order.' });
-    } finally {
-      setSubmitting(false);
     }
-  }, [canSubmit, derived.amount, derived.effectivePrice, side, symbol]);
+  }, [canSubmit, derived.amount, derived.effectivePrice, side, symbol, orderType, placeOrder]);
 
   const selectBuy = useCallback(() => { setSide('BUY'); setAmountText(''); setTotalText(''); }, []);
   const selectSell = useCallback(() => { setSide('SELL'); setAmountText(''); setTotalText(''); }, []);
@@ -728,9 +737,16 @@ function TradePanelBase({
                 placeholderTextColor={T.textTer}
                 value={limitPrice}
                 onChangeText={setLimitPrice}
+                returnKeyType="done"
+                blurOnSubmit={false}
               />
               <Text style={styles.inputSuffix}>USDT</Text>
             </View>
+            <Text style={styles.fieldHint}>
+              {derived.effectivePrice > 0
+                ? `Amount and Total below are calculated at this price.`
+                : `Set the price you want to ${side === 'BUY' ? 'buy' : 'sell'} at — Amount and Total will use it.`}
+            </Text>
           </View>
         )}
 
@@ -741,14 +757,17 @@ function TradePanelBase({
 
         <View style={styles.inputRow}>
           <Text style={styles.inputLabel}>Amount</Text>
-          <View style={styles.inputWrap}>
+          <View style={[styles.inputWrap, !amountEditable && styles.inputWrapDisabled]}>
             <TextInput
               style={styles.input}
               keyboardType="decimal-pad"
-              placeholder="0.00"
+              placeholder={amountEditable ? '0.00' : 'Set limit price first'}
               placeholderTextColor={T.textTer}
               value={displayAmount}
               onChangeText={handleAmountChange}
+              editable={amountEditable}
+              returnKeyType="done"
+              blurOnSubmit={false}
             />
             <Text style={styles.inputSuffix}>{derived.baseAsset}</Text>
           </View>
@@ -756,14 +775,17 @@ function TradePanelBase({
 
         <View style={styles.inputRow}>
           <Text style={styles.inputLabel}>Total</Text>
-          <View style={styles.inputWrap}>
+          <View style={[styles.inputWrap, !amountEditable && styles.inputWrapDisabled]}>
             <TextInput
               style={styles.input}
               keyboardType="decimal-pad"
-              placeholder="0.00"
+              placeholder={amountEditable ? '0.00' : 'Set limit price first'}
               placeholderTextColor={T.textTer}
               value={displayTotal}
               onChangeText={handleTotalChange}
+              editable={amountEditable}
+              returnKeyType="done"
+              blurOnSubmit={false}
             />
             <Text style={styles.inputSuffix}>USDT</Text>
           </View>
@@ -771,7 +793,12 @@ function TradePanelBase({
 
         <View style={styles.pctRow}>
           {[0.25, 0.5, 0.75, 1].map((pct) => (
-            <TouchableOpacity key={pct} onPress={() => applyPct(pct)} style={styles.pctBtn}>
+            <TouchableOpacity
+              key={pct}
+              onPress={() => applyPct(pct)}
+              disabled={!amountEditable}
+              style={[styles.pctBtn, !amountEditable && { opacity: 0.4 }]}
+            >
               <Text style={styles.pctBtnText}>{pct === 1 ? 'MAX' : `${pct * 100}%`}</Text>
             </TouchableOpacity>
           ))}
@@ -975,10 +1002,16 @@ export default function CoinDetail() {
   return (
     <View style={styles.root}>
       <AmbientField />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+      >
         <ScrollView
-          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 60 }]}
+          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 140 }]}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
         >
           <Animated.View entering={FadeIn.duration(400)} style={styles.topBar}>
             <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
@@ -1052,7 +1085,7 @@ export default function CoinDetail() {
             </GlassPanel>
           </Animated.View>
 
-          <TradePanel symbol={symbol} meta={meta} livePrice={livePrice} token={token} />
+          <TradePanel key={symbol} symbol={symbol} meta={meta} livePrice={livePrice} token={token} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -1172,10 +1205,12 @@ const styles = StyleSheet.create({
 
   inputRow: { marginBottom: 11 },
   inputLabel: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 7, letterSpacing: 0.3 },
+  fieldHint: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 6 },
   inputWrap: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: T.glass,
     borderRadius: 14, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 15,
   },
+  inputWrapDisabled: { opacity: 0.45 },
   input: { flex: 1, fontSize: 15, fontFamily: FontFamily.heading, color: T.textPri, paddingVertical: 14 },
   inputSuffix: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
 

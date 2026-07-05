@@ -540,21 +540,19 @@ export const logout = async (req: AuthRequest, res: Response) => {
 export const updateProfile = async (req: Request, res: Response) => {
   try {
     const userId = req.params.userId;
-    const { name, email } = req.body;
+    const { name } = req.body;
 
     if (!userId) {
       return res.status(400).json({ success: false, error: 'User ID is required' });
     }
 
-    const normalizedEmail = typeof email === 'string' && email.trim() ? normalizeEmail(email) : undefined;
-    if (normalizedEmail && !isValidEmail(normalizedEmail)) {
-      return res.status(400).json({ success: false, error: 'Invalid email address' });
+    if (typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ success: false, error: 'Name is required' });
     }
 
     const [updatedUser] = await db.update(users)
       .set({
-        name: typeof name === 'string' && name.trim() ? name.trim() : undefined,
-        email: normalizedEmail,
+        name: name.trim(),
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId))

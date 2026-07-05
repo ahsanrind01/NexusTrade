@@ -22,6 +22,11 @@
     },
     "ios": {
       "bundleIdentifier": "com.ahsanrind.frontend"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "ad2aa7b1-b7ef-4a44-ad0f-c1c7a6129d39"
+      }
     }
   }
 }

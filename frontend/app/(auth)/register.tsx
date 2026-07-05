@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
@@ -11,12 +11,17 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../stores/authStore';
 import { FontFamily, FontSize } from '../../constants/typography';
 
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
+
+WebBrowser.maybeCompleteAuthSession();
 
 const { width, height } = Dimensions.get('window');
 
@@ -41,7 +46,6 @@ const T = {
   textTer: '#5B6072',
 };
 
-// --- Shared primitives, copied locally (same pattern as the dashboard screen) ---
 
 function GlassPanel({ style, children, intensity = 28 }: any) {
   if (BlurView) {
@@ -96,10 +100,6 @@ function FloatingInput({ label, value, onChangeText, secureTextEntry, keyboardTy
   const focused = useSharedValue(0);
   const hasValue = value.length > 0;
 
-  const lineWidth = useAnimatedStyle(() => ({
-    width: withTiming(focused.value ? '100%' : '0%', { duration: 400, easing: Easing.out(Easing.cubic) }),
-  }));
-
   const labelUp = useAnimatedStyle(() => ({
     transform: [
       { translateY: withTiming((focused.value || hasValue) ? -21 : 0, { duration: 250 }) },
@@ -145,10 +145,16 @@ export default function Register() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const setAuth = useAuthStore((s) => s.setAuth);
 
   const accentLineWidth = useSharedValue(0);
   const buttonPress = useSharedValue(0);
+
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+    scopes: ['openid', 'profile', 'email'],
+  });
 
   useEffect(() => {
     accentLineWidth.value = withDelay(500, withTiming(1, { duration: 900, easing: Easing.out(Easing.cubic) }));
@@ -190,6 +196,44 @@ export default function Register() {
       buttonPress.value = withSpring(0, { damping: 10 });
     }
   };
+
+  const handleGoogleIdToken = useCallback(async (idToken: string) => {
+    setGoogleLoading(true);
+    try {
+      const res = await api.post('/auth/google', { idToken });
+      const { token, user } = res.data;
+      setAuth(token, user);
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      Alert.alert('Google Sign-In Failed', err.response?.data?.error || 'Something went wrong');
+    } finally {
+      setGoogleLoading(false);
+    }
+  }, [setAuth]);
+
+  useEffect(() => {
+    if (response?.type === 'success') {
+      const idToken = response.authentication?.idToken;
+      if (idToken) {
+        handleGoogleIdToken(idToken);
+      } else {
+        Alert.alert('Google Sign-In Failed', 'No ID token returned by Google.');
+      }
+    } else if (response?.type === 'error') {
+      Alert.alert('Google Sign-In Failed', 'Something went wrong while signing in with Google.');
+    }
+  }, [response, handleGoogleIdToken]);
+
+const handleGooglePress = useCallback(async () => {
+  if (googleLoading || !request) return;
+
+  try {
+    setGoogleLoading(true);
+    await promptAsync();
+  } finally {
+    setGoogleLoading(false);
+  }
+}, [promptAsync, googleLoading, request]);
 
   const strengthLevel =
     password.length === 0 ? 0 :
@@ -305,6 +349,30 @@ export default function Register() {
                   </LinearGradient>
                 </TouchableOpacity>
               </Animated.View>
+
+              <Animated.View entering={FadeIn.delay(480).duration(400)} style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.dividerLine} />
+              </Animated.View>
+
+              <Animated.View entering={FadeInDown.delay(520).springify().damping(16)}>
+                <TouchableOpacity
+                  onPress={handleGooglePress}
+                  disabled={!request || googleLoading}
+                  activeOpacity={0.8}
+                  style={[styles.googleBtn, (!request || googleLoading) && { opacity: 0.5 }]}
+                >
+                  {googleLoading ? (
+                    <ActivityIndicator color={T.textPri} />
+                  ) : (
+                    <>
+                      <Ionicons name="logo-google" size={17} color={T.textPri} />
+                      <Text style={styles.googleBtnText}>Continue with Google</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </Animated.View>
             </GlassPanel>
           </Animated.View>
 
@@ -332,9 +400,9 @@ export default function Register() {
             </TouchableOpacity>
             <Text style={styles.termsNote}>
               By continuing you agree to our{' '}
-              <Text style={{ color: T.accent }}>Terms</Text>
+              <Text style={{ color: T.accent }} onPress={() => router.push('/legal/terms')}>Terms</Text>
               {' '}and{' '}
-              <Text style={{ color: T.accent }}>Privacy Policy</Text>
+              <Text style={{ color: T.accent }} onPress={() => router.push('/legal/privacy')}>Privacy Policy</Text>
             </Text>
           </Animated.View>
         </ScrollView>
@@ -382,6 +450,17 @@ const styles = StyleSheet.create({
   submitInner: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   submitText: { fontSize: FontSize.md, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 2 },
   submitArrow: { fontSize: FontSize.lg, color: '#fff' },
+
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20, marginBottom: 16 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: T.hairline },
+  dividerText: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 1 },
+
+  googleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    borderRadius: 14, borderWidth: 1, borderColor: T.glassBorderHi,
+    backgroundColor: 'rgba(255,255,255,0.03)', paddingVertical: 15,
+  },
+  googleBtnText: { fontSize: FontSize.md, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2 },
 
   perksWrap: { marginBottom: 24, borderRadius: 20 },
   perksPanel: { borderRadius: 20, paddingVertical: 16, paddingHorizontal: 18, borderWidth: 1, borderColor: T.glassBorder, gap: 12 },

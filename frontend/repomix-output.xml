@@ -55,6 +55,9 @@ app/
     profile.tsx
     trade.tsx
     wallet.tsx
+  legal/
+    privacy.tsx
+    terms.tsx
   _layout.tsx
   index.tsx
 assets/
@@ -1093,7 +1096,9 @@ import { useIsFocused } from '@react-navigation/native';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useAuthStore } from '../../stores/authStore';
-import { api } from '../../lib/api';
+import { useWallet } from '../../hooks/useWallet';
+import { useWalletStore } from '../../stores/walletStore';
+import { usePlaceOrder } from '../../hooks/useOrders';
 
 let BlurView: any = null;
 try {
@@ -1201,8 +1206,8 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28, t
   if (BlurView) {
     return (
       <View style={[style, { overflow: 'hidden' }]}>
-        <BlurView intensity={intensity} tint={tint} style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
+        <BlurView pointerEvents="none" intensity={intensity} tint={tint} style={StyleSheet.absoluteFill} />
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
         {children}
       </View>
     );
@@ -1684,24 +1689,25 @@ function TradePanelBase({
   const [totalText, setTotalText] = useState('');
   const [activeField, setActiveField] = useState<'amount' | 'total'>('amount');
   const [limitPrice, setLimitPrice] = useState('');
-  const [balances, setBalances] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
-    if (!token) return;
-    const controller = new AbortController();
-    api.get('/wallet/balance', { signal: controller.signal as any })
-      .then((r) => { if (r.data?.success) setBalances(r.data.balance ?? {}); })
-      .catch(() => {});
-    return () => controller.abort();
-  }, [token]);
+    if (!banner) return;
+    const t = setTimeout(() => setBanner(null), 4000);
+    return () => clearTimeout(t);
+  }, [banner]);
+
+  useWallet();
+  const balances = useWalletStore((s) => s.balances);
+
+  const placeOrder = usePlaceOrder();
+  const submitting = placeOrder.isPending;
 
   const derived = useMemo(() => {
     const effectivePrice = orderType === 'MARKET' ? livePrice : (parseFloat(limitPrice) || 0);
     const baseAsset = meta.short;
-    const quoteBalance = parseFloat(balances['USDT'] ?? '0');
-    const baseBalance = parseFloat(balances[baseAsset] ?? '0');
+    const quoteBalance = balances['USDT'] ?? 0;
+    const baseBalance = balances[baseAsset] ?? 0;
     const parsedAmount = parseFloat(amountText) || 0;
     const parsedTotal = parseFloat(totalText) || 0;
     const amount = activeField === 'amount' ? parsedAmount : (effectivePrice > 0 ? parsedTotal / effectivePrice : 0);
@@ -1715,6 +1721,14 @@ function TradePanelBase({
 
   const displayAmount = activeField === 'amount' ? amountText : (derived.amount ? derived.amount.toFixed(6) : '');
   const displayTotal = activeField === 'total' ? totalText : (derived.total ? derived.total.toFixed(2) : '');
+  const amountEditable = orderType === 'MARKET' || derived.effectivePrice > 0;
+
+  useEffect(() => {
+    if (orderType === 'LIMIT' && !(parseFloat(limitPrice) > 0)) {
+      setAmountText('');
+      setTotalText('');
+    }
+  }, [orderType, limitPrice]);
 
   const applyPct = useCallback((pct: number) => {
     if (side === 'BUY') {
@@ -1735,28 +1749,26 @@ function TradePanelBase({
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
-    setSubmitting(true);
     setBanner(null);
     try {
-      const res = await api.post('/orders/place', {
+      const res = await placeOrder.mutateAsync({
         asset: symbol,
         amount: derived.amount,
         price: derived.effectivePrice,
         side,
+        type: orderType,
       });
-      if (res.data?.success) {
-        setBanner({ type: 'success', text: `${side === 'BUY' ? 'Buy' : 'Sell'} order placed · #${String(res.data.orderId).slice(0, 8)}` });
+      if (res?.success) {
+        setBanner({ type: 'success', text: `${side === 'BUY' ? 'Buy' : 'Sell'} order placed · #${String(res.orderId).slice(0, 8)}` });
         setAmountText('');
         setTotalText('');
       } else {
-        setBanner({ type: 'error', text: res.data?.error ?? 'Order failed. Please try again.' });
+        setBanner({ type: 'error', text: 'Order failed. Please try again.' });
       }
     } catch (err: any) {
       setBanner({ type: 'error', text: err.response?.data?.error ?? 'Network error placing order.' });
-    } finally {
-      setSubmitting(false);
     }
-  }, [canSubmit, derived.amount, derived.effectivePrice, side, symbol]);
+  }, [canSubmit, derived.amount, derived.effectivePrice, side, symbol, orderType, placeOrder]);
 
   const selectBuy = useCallback(() => { setSide('BUY'); setAmountText(''); setTotalText(''); }, []);
   const selectSell = useCallback(() => { setSide('SELL'); setAmountText(''); setTotalText(''); }, []);
@@ -1803,9 +1815,16 @@ function TradePanelBase({
                 placeholderTextColor={T.textTer}
                 value={limitPrice}
                 onChangeText={setLimitPrice}
+                returnKeyType="done"
+                blurOnSubmit={false}
               />
               <Text style={styles.inputSuffix}>USDT</Text>
             </View>
+            <Text style={styles.fieldHint}>
+              {derived.effectivePrice > 0
+                ? `Amount and Total below are calculated at this price.`
+                : `Set the price you want to ${side === 'BUY' ? 'buy' : 'sell'} at — Amount and Total will use it.`}
+            </Text>
           </View>
         )}
 
@@ -1816,14 +1835,17 @@ function TradePanelBase({
 
         <View style={styles.inputRow}>
           <Text style={styles.inputLabel}>Amount</Text>
-          <View style={styles.inputWrap}>
+          <View style={[styles.inputWrap, !amountEditable && styles.inputWrapDisabled]}>
             <TextInput
               style={styles.input}
               keyboardType="decimal-pad"
-              placeholder="0.00"
+              placeholder={amountEditable ? '0.00' : 'Set limit price first'}
               placeholderTextColor={T.textTer}
               value={displayAmount}
               onChangeText={handleAmountChange}
+              editable={amountEditable}
+              returnKeyType="done"
+              blurOnSubmit={false}
             />
             <Text style={styles.inputSuffix}>{derived.baseAsset}</Text>
           </View>
@@ -1831,14 +1853,17 @@ function TradePanelBase({
 
         <View style={styles.inputRow}>
           <Text style={styles.inputLabel}>Total</Text>
-          <View style={styles.inputWrap}>
+          <View style={[styles.inputWrap, !amountEditable && styles.inputWrapDisabled]}>
             <TextInput
               style={styles.input}
               keyboardType="decimal-pad"
-              placeholder="0.00"
+              placeholder={amountEditable ? '0.00' : 'Set limit price first'}
               placeholderTextColor={T.textTer}
               value={displayTotal}
               onChangeText={handleTotalChange}
+              editable={amountEditable}
+              returnKeyType="done"
+              blurOnSubmit={false}
             />
             <Text style={styles.inputSuffix}>USDT</Text>
           </View>
@@ -1846,7 +1871,12 @@ function TradePanelBase({
 
         <View style={styles.pctRow}>
           {[0.25, 0.5, 0.75, 1].map((pct) => (
-            <TouchableOpacity key={pct} onPress={() => applyPct(pct)} style={styles.pctBtn}>
+            <TouchableOpacity
+              key={pct}
+              onPress={() => applyPct(pct)}
+              disabled={!amountEditable}
+              style={[styles.pctBtn, !amountEditable && { opacity: 0.4 }]}
+            >
               <Text style={styles.pctBtnText}>{pct === 1 ? 'MAX' : `${pct * 100}%`}</Text>
             </TouchableOpacity>
           ))}
@@ -2050,10 +2080,16 @@ export default function CoinDetail() {
   return (
     <View style={styles.root}>
       <AmbientField />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+      >
         <ScrollView
-          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: 60 }]}
+          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 140 }]}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
         >
           <Animated.View entering={FadeIn.duration(400)} style={styles.topBar}>
             <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
@@ -2127,7 +2163,7 @@ export default function CoinDetail() {
             </GlassPanel>
           </Animated.View>
 
-          <TradePanel symbol={symbol} meta={meta} livePrice={livePrice} token={token} />
+          <TradePanel key={symbol} symbol={symbol} meta={meta} livePrice={livePrice} token={token} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -2247,10 +2283,12 @@ const styles = StyleSheet.create({
 
   inputRow: { marginBottom: 11 },
   inputLabel: { fontSize: 10.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 7, letterSpacing: 0.3 },
+  fieldHint: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 6 },
   inputWrap: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: T.glass,
     borderRadius: 14, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 15,
   },
+  inputWrapDisabled: { opacity: 0.45 },
   input: { flex: 1, fontSize: 15, fontFamily: FontFamily.heading, color: T.textPri, paddingVertical: 14 },
   inputSuffix: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
 
@@ -2283,7 +2321,7 @@ import { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Dimensions, TextInput, KeyboardAvoidingView, Platform,
-  ListRenderItemInfo,
+  ListRenderItemInfo, Alert,
 } from 'react-native';
 import Animated, {
   FadeIn, FadeInDown, FadeInUp,
@@ -2301,6 +2339,10 @@ import { useMarketSocket } from '../../hooks/useMarketSocket';
 import { useTicker24h } from '../../hooks/useTicker24h';
 import { useWallet } from '../../hooks/useWallet';
 import { useWalletStore } from '../../stores/walletStore';
+import { useMyOrders } from '../../hooks/useOrders';
+import { useOrderStore } from '../../stores/orderStore';
+import { useFundingHistory } from '../../hooks/useFunding';
+import { useFundingStore, FundingTransaction } from '../../stores/fundingStore';
 
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
@@ -2337,7 +2379,6 @@ const T = {
   textTer: '#60657A',
 };
 
-const PERIODS = ['1D', '1W', '1M', '3M', 'ALL'];
 const AI_SIGNALS = [
   { l: 'BTC Momentum', v: 'Strong ↑', c: T.gain },
   { l: 'Fear / Greed', v: '38',       c: T.gold },
@@ -2388,13 +2429,16 @@ const PriceFlash = memo(function PriceFlash({ price, positive }: { price: string
   );
 }, (p, n) => p.price === n.price && p.positive === n.positive);
 
-const Sparkline = memo(function Sparkline({ points, positive }: { points: number[]; positive: boolean }) {
+// width/height are now props (defaulted to the original asset-row size) so
+// the same component can be reused, larger, for the real portfolio chart.
+const Sparkline = memo(function Sparkline({
+  points, positive, width: w = 58, height: h = 34,
+}: { points: number[]; positive: boolean; width?: number; height?: number }) {
   const segments = useMemo(() => {
     if (points.length < 2) return null;
     const max = Math.max(...points);
     const min = Math.min(...points);
     const range = max - min || 1;
-    const h = 34, w = 58;
     const step = w / (points.length - 1);
     return points.slice(0, -1).map((p, i) => {
       const x1 = i * step;
@@ -2405,12 +2449,12 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
       return { x1, y1, length, angle, opacity: 0.4 + (i / points.length) * 0.6 };
     });
-  }, [points]);
+  }, [points, w, h]);
 
-  if (!segments) return <View style={styles.sparklinePlaceholder} />;
+  if (!segments) return <View style={{ width: w, height: h }} />;
   const color = positive ? T.gain : T.loss;
   return (
-    <View style={{ width: 58, height: 34 }}>
+    <View style={{ width: w, height: h }}>
       {segments.map((s, i) => (
         <View key={i} style={{
           position: 'absolute', left: s.x1, top: s.y1,
@@ -2423,7 +2467,7 @@ const Sparkline = memo(function Sparkline({ points, positive }: { points: number
       ))}
     </View>
   );
-}, (p, n) => p.points === n.points && p.positive === n.positive);
+}, (p, n) => p.points === n.points && p.positive === n.positive && p.width === n.width && p.height === n.height);
 
 function AmbientField() {
   const drift = useSharedValue(0);
@@ -2448,13 +2492,45 @@ function AmbientField() {
   );
 }
 
-const PortfolioCard = memo(function PortfolioCard() {
-  const [activePeriod, setActivePeriod] = useState(0);
+// Builds a cumulative net-deposit series from real funding transactions
+// (completed deposits add, completed withdrawals subtract), sorted oldest
+// to newest. This replaces the old Math.random() bar chart — it's real
+// account activity, not a mock, though it's a proxy for portfolio value
+// (deposits net of withdrawals) rather than a live mark-to-market curve,
+// since the backend doesn't yet persist historical portfolio valuations.
+function usePortfolioSeries(transactions: FundingTransaction[]) {
+  return useMemo(() => {
+    const completed = transactions
+      .filter((t) => t.status === 'COMPLETED')
+      .slice()
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    if (completed.length === 0) return { points: [] as number[], hasData: false };
+
+    let running = 0;
+    const points = completed.map((t) => {
+      const amt = parseFloat(t.amount) || 0;
+      running += t.direction === 'DEPOSIT' ? amt : -amt;
+      return running;
+    });
+
+    // Cap to the most recent 12 points so the chart stays readable.
+    const trimmed = points.length > 12 ? points.slice(-12) : points;
+    return { points: trimmed, hasData: trimmed.length >= 2 };
+  }, [transactions]);
+}
+
+const PortfolioCard = memo(function PortfolioCard({
+  openOrdersCount, totalDeposited, series, hasSeriesData,
+}: {
+  openOrdersCount: number;
+  totalDeposited: number;
+  series: number[];
+  hasSeriesData: boolean;
+}) {
   const totalUsd = useWalletStore((s) => s.totalUsd);
   const balances = useWalletStore((s) => s.balances);
   const { isLoading } = useWallet();
-
-  const BARS = [28, 40, 36, 56, 42, 68, 52, 64, 48, 80, 66, 100];
 
   const formattedTotal = totalUsd.toLocaleString('en-US', {
     minimumFractionDigits: 2,
@@ -2462,6 +2538,7 @@ const PortfolioCard = memo(function PortfolioCard() {
   });
 
   const assetCount = Object.keys(balances).length;
+  const seriesPositive = series.length < 2 || series[series.length - 1] >= series[0];
 
   return (
     <Animated.View entering={FadeInDown.delay(70).springify().damping(16)} style={styles.heroWrap}>
@@ -2487,78 +2564,67 @@ const PortfolioCard = memo(function PortfolioCard() {
             {isLoading && totalUsd === 0 ? (
               <View style={styles.skeletonValue} />
             ) : (
-              <Text style={styles.heroValue}>${formattedTotal}</Text>
+              // adjustsFontSizeToFit + numberOfLines=1: large balances used to
+              // wrap onto a second line here. Now the value shrinks to fit
+              // one line instead, down to 60% of the base font size.
+              <Text
+                style={styles.heroValue}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                ${formattedTotal}
+              </Text>
             )}
-            <View style={styles.heroDeltaRow}>
-              <View style={styles.deltaChip}>
-                <Text style={styles.heroDelta}>
-                  {assetCount > 0 ? `${assetCount} assets` : 'No assets'}
-                </Text>
-              </View>
+            <View style={styles.deltaChip}>
+              <Text style={styles.heroDelta}>
+                {assetCount > 0 ? `${assetCount} asset${assetCount === 1 ? '' : 's'}` : 'No assets yet'}
+              </Text>
             </View>
           </View>
           <View style={styles.heroStatsCol}>
             <View style={styles.heroStatItem}>
               <Text style={styles.heroStatLabel}>USDT</Text>
-              <Text style={[styles.heroStatValue, { color: T.gain }]}>
+              <Text style={[styles.heroStatValue, { color: T.gain }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                 {balances['USDT'] ? `$${balances['USDT'].toFixed(2)}` : '—'}
               </Text>
             </View>
             <View style={[styles.heroStatItem, { marginTop: 14 }]}>
               <Text style={styles.heroStatLabel}>BTC</Text>
-              <Text style={[styles.heroStatValue, { color: T.accent }]}>
+              <Text style={[styles.heroStatValue, { color: T.accent }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                 {balances['BTC'] ? balances['BTC'].toFixed(6) : '—'}
               </Text>
             </View>
           </View>
         </View>
 
-        <View style={styles.barsRow}>
-          {BARS.map((h, i) => {
-            const last = i === BARS.length - 1;
-            return (
-              <Animated.View key={i} entering={FadeInUp.delay(140 + i * 18).springify()} style={styles.barCol}>
-                <LinearGradient
-                  colors={last ? [T.violet, T.accent] : [T.accent + '00', T.accent + Math.round((0.08 + (i / BARS.length) * 0.34) * 255).toString(16).padStart(2, '0')]}
-                  start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
-                  style={[styles.bar, { height: (h / 100) * 50 }]}
-                />
-              </Animated.View>
-            );
-          })}
+        {/* Real chart: cumulative net deposits, built from GET /funding/transactions. */}
+        <View style={styles.chartRow}>
+          {hasSeriesData ? (
+            <Sparkline points={series} positive={seriesPositive} width={width - 76} height={54} />
+          ) : (
+            <View style={styles.chartEmpty}>
+              <Text style={styles.chartEmptyText}>No deposit activity yet — fund your account to see it here</Text>
+            </View>
+          )}
         </View>
-
-        <View style={styles.periodRow}>
-          {PERIODS.map((p, i) => (
-            <TouchableOpacity
-              key={p}
-              onPress={() => setActivePeriod(i)}
-              style={[styles.periodBtn, activePeriod === i && styles.periodBtnActive]}
-            >
-              {activePeriod === i && (
-                <LinearGradient
-                  colors={[T.accentDeep, T.violet]}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={StyleSheet.absoluteFill}
-                />
-              )}
-              <Text style={[styles.periodText, activePeriod === i && styles.periodTextActive]}>{p}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <Text style={styles.chartCaption}>
+          {hasSeriesData ? 'Net deposits over your recent activity' : ' '}
+        </Text>
 
         <View style={styles.heroDivider} />
 
         <View style={styles.statsStrip}>
           {[
-            { l: 'TOTAL VALUE',  v: `$${formattedTotal}`,       c: undefined },
-            { l: 'ASSETS',       v: `${assetCount}`,             c: T.accent  },
-            { l: 'USDT BAL',     v: balances['USDT'] ? `$${balances['USDT'].toFixed(0)}` : '—', c: T.gain },
-            { l: 'BTC BAL',      v: balances['BTC']  ? balances['BTC'].toFixed(5)  : '—', c: T.gold },
+            { l: 'ASSETS',       v: `${assetCount}`,  c: T.accent },
+            { l: 'OPEN ORDERS',  v: `${openOrdersCount}`, c: T.gold },
+            { l: 'DEPOSITED',    v: `$${totalDeposited.toLocaleString('en-US', { maximumFractionDigits: 0 })}`, c: T.gain },
           ].map((s, i) => (
             <View key={s.l} style={[styles.statCell, i > 0 && styles.statCellDivider]}>
               <Text style={styles.statCellLabel}>{s.l}</Text>
-              <Text style={[styles.statCellValue, s.c ? { color: s.c } : {}]}>{s.v}</Text>
+              <Text style={[styles.statCellValue, s.c ? { color: s.c } : {}]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                {s.v}
+              </Text>
             </View>
           ))}
         </View>
@@ -2567,7 +2633,9 @@ const PortfolioCard = memo(function PortfolioCard() {
   );
 });
 
-const ActionButton = memo(function ActionButton({ label, icon, color }: { label: string; icon: string; color: string }) {
+const ActionButton = memo(function ActionButton({
+  label, icon, color, onPress,
+}: { label: string; icon: string; color: string; onPress: () => void }) {
   const press = useSharedValue(0);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(press.value, [0, 1], [1, 0.9]) }] }));
   const glowStyle = useAnimatedStyle(() => ({ opacity: interpolate(press.value, [0, 1], [0, 1]) }));
@@ -2577,6 +2645,7 @@ const ActionButton = memo(function ActionButton({ label, icon, color }: { label:
         activeOpacity={1}
         onPressIn={() => { press.value = withSpring(1, { damping: 14 }); }}
         onPressOut={() => { press.value = withSpring(0, { damping: 10 }); }}
+        onPress={onPress}
         style={{ alignItems: 'center' }}
       >
         <View style={styles.actionIconShell}>
@@ -2590,14 +2659,34 @@ const ActionButton = memo(function ActionButton({ label, icon, color }: { label:
 });
 
 const QuickActions = memo(function QuickActions() {
+  const router = useRouter();
+
+  // Add Funds / Withdraw deep-link into the Wallet screen's existing
+  // deposit/withdraw modal (see app/(tabs)/wallet.tsx's `action` param
+  // handling). Trade goes straight to the trading terminal. Transfer has
+  // no backend endpoint yet (funding-service only supports deposit/
+  // withdraw), so it's flagged honestly instead of silently doing nothing.
+  const handleAddFunds = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'deposit' } });
+  }, [router]);
+  const handleWithdraw = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'withdraw' } });
+  }, [router]);
+  const handleTrade = useCallback(() => {
+    router.push('/(tabs)/trade');
+  }, [router]);
+  const handleTransfer = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'transfer' } });
+  }, [router]);
+
   return (
     <Animated.View entering={FadeInDown.delay(150).springify().damping(16)} style={styles.actionsPanelWrap}>
       <GlassPanel style={styles.actionsPanel} intensity={24}>
         <View style={styles.actionsRow}>
-          <ActionButton label="Add Funds" icon="＋" color={T.gain} />
-          <ActionButton label="Withdraw"  icon="↑"  color={T.loss} />
-          <ActionButton label="Trade"     icon="⇄"  color={T.accent} />
-          <ActionButton label="Transfer"  icon="→"  color={T.violet} />
+          <ActionButton label="Add Funds" icon="＋" color={T.gain} onPress={handleAddFunds} />
+          <ActionButton label="Withdraw"  icon="↑"  color={T.loss} onPress={handleWithdraw} />
+          <ActionButton label="Trade"     icon="⇄"  color={T.accent} onPress={handleTrade} />
+          <ActionButton label="Transfer"  icon="→"  color={T.violet} onPress={handleTransfer} />
         </View>
       </GlassPanel>
     </Animated.View>
@@ -2719,6 +2808,30 @@ export default function Home() {
   useMarketSocket();
   useTicker24h(TOP_5);
 
+  // Populate orderStore/fundingStore so the portfolio card can show real
+  // open-orders / deposit stats and chart, even if the user hasn't visited
+  // the Trade or Wallet tabs yet this session.
+  useMyOrders();
+  useFundingHistory();
+  const orders = useOrderStore((s) => s.orders);
+  const transactions = useFundingStore((s) => s.transactions);
+
+  const openOrdersCount = useMemo(
+    () => orders.filter((o) => o.status === 'PENDING' || o.status === 'PARTIAL').length,
+    [orders]
+  );
+  const totalDeposited = useMemo(
+    () => transactions
+      .filter((t) => t.direction === 'DEPOSIT' && t.status === 'COMPLETED')
+      .reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0),
+    [transactions]
+  );
+  const hasRecentActivity = useMemo(
+    () => transactions.some((t) => Date.now() - new Date(t.createdAt).getTime() < 1000 * 60 * 60 * 24),
+    [transactions]
+  );
+  const { points: portfolioSeries, hasData: hasSeriesData } = usePortfolioSeries(transactions);
+
   const greeting = useMemo(() => {
     const h = new Date().getHours();
     if (h < 12) return 'Good morning';
@@ -2745,6 +2858,13 @@ export default function Home() {
 
   const keyExtractor = useCallback((item: any) => item.symbol, []);
 
+  // Bell now opens the Wallet tab's activity/history section (real
+  // destination, real data) instead of doing nothing. The dot only lights
+  // up when there's genuine activity in the last 24h.
+  const handleNotifPress = useCallback(() => {
+    router.push({ pathname: '/(tabs)/wallet', params: { action: 'history' } });
+  }, [router]);
+
   const ListHeader = useMemo(() => (
     <>
       <Animated.View entering={FadeIn.delay(50).duration(450)} style={styles.topBar}>
@@ -2753,20 +2873,28 @@ export default function Home() {
           <Text style={styles.userName}>{user?.name ?? 'Trader'}</Text>
         </View>
         <View style={styles.topRight}>
-          <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.32)' : 'rgba(255,107,122,0.32)' }]}>
+          <View style={[
+            styles.statusPill,
+            connected ? styles.statusPillLive : styles.statusPillOffline,
+          ]}>
             <PulseDot color={connected ? T.gain : T.loss} />
             <Text style={[styles.statusText, { color: connected ? T.gain : T.loss }]}>
               {connected ? 'LIVE' : 'OFFLINE'}
             </Text>
           </View>
-          <TouchableOpacity style={styles.notifBtn}>
-            <View style={styles.notifDot} />
+          <TouchableOpacity style={styles.notifBtn} onPress={handleNotifPress} activeOpacity={0.75}>
+            {hasRecentActivity && <View style={styles.notifDot} />}
             <Text style={styles.notifIcon}>◉</Text>
           </TouchableOpacity>
         </View>
       </Animated.View>
 
-      <PortfolioCard />
+      <PortfolioCard
+        openOrdersCount={openOrdersCount}
+        totalDeposited={totalDeposited}
+        series={portfolioSeries}
+        hasSeriesData={hasSeriesData}
+      />
       <QuickActions />
       <AIInsightCard />
 
@@ -2784,7 +2912,7 @@ export default function Home() {
         <Text style={styles.listHeaderText}>Price</Text>
       </View>
     </>
-  ), [greeting, user?.name, connected]);
+  ), [greeting, user?.name, connected, handleNotifPress, hasRecentActivity, openOrdersCount, totalDeposited, portfolioSeries, hasSeriesData, router]);
 
   const ListEmpty = useMemo(() => (
     <Animated.View entering={FadeIn.duration(300)} style={styles.emptyState}>
@@ -2827,8 +2955,23 @@ const styles = StyleSheet.create({
   greeting: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6 },
   userName: { fontSize: 24, fontFamily: FontFamily.heading, color: T.textPri, marginTop: 4, letterSpacing: -0.4 },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.035)' },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 13, paddingVertical: 8, borderRadius: 20,
+    borderWidth: 1,
+  },
+  // Distinct, slightly punchier looks for live vs offline instead of one
+  // plain grey pill with a barely-visible border in both states.
+  statusPillLive: {
+    backgroundColor: 'rgba(61,220,151,0.10)',
+    borderColor: 'rgba(61,220,151,0.34)',
+    shadowColor: T.gain, shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
+  statusPillOffline: {
+    backgroundColor: 'rgba(255,107,122,0.08)',
+    borderColor: 'rgba(255,107,122,0.3)',
+  },
+  statusText: { fontSize: 9.5, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
   notifBtn: { width: 40, height: 40, borderRadius: 14, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   notifDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: T.loss, position: 'absolute', top: 8, right: 8, borderWidth: 1.5, borderColor: T.bg0, zIndex: 1 },
   notifIcon: { fontSize: 16, color: T.textSec },
@@ -2836,27 +2979,23 @@ const styles = StyleSheet.create({
   heroWrap: { marginBottom: 18, borderRadius: 28, shadowColor: T.accentDeep, shadowOpacity: 0.32, shadowRadius: 34, shadowOffset: { width: 0, height: 14 }, elevation: 12 },
   heroPanel: { borderRadius: 28, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
   heroInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 27, borderTopRightRadius: 27 },
-  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
   liveTag: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: T.gainDim, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, alignSelf: 'flex-start', marginBottom: 11, borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)' },
   liveTagText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 1.5 },
-  heroValue: { fontSize: 40, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.4 },
-  heroDeltaRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 9 },
-  heroDelta: { fontSize: 14, fontFamily: FontFamily.heading, color: T.gain },
-  heroDeltaPct: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
-  heroStatsCol: { alignItems: 'flex-end' },
-  heroStatItem: { alignItems: 'flex-end' },
+  // Fixed line-height/height so adjustsFontSizeToFit has one predictable
+  // box to shrink into, instead of the balance re-flowing onto a 2nd line.
+  heroValue: { fontSize: 40, lineHeight: 46, height: 46, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.4, maxWidth: width * 0.55 },
+  heroDelta: { fontSize: 11.5, fontFamily: FontFamily.heading, color: T.gain },
+  heroStatsCol: { alignItems: 'flex-end', maxWidth: width * 0.32 },
+  heroStatItem: { alignItems: 'flex-end', width: '100%' },
   heroStatLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.9, marginBottom: 4 },
   heroStatValue: { fontSize: 16, fontFamily: FontFamily.heading },
 
-  barsRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3.5, height: 56, marginBottom: 20 },
-  barCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end' },
-  bar: { width: '100%', borderRadius: 4 },
-
-  periodRow: { flexDirection: 'row', gap: 6, marginBottom: 20 },
-  periodBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: T.hairline, overflow: 'hidden' },
-  periodBtnActive: { borderColor: 'transparent', shadowColor: T.accentDeep, shadowOpacity: 0.5, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
-  periodText: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer },
-  periodTextActive: { color: '#fff' },
+  // Real chart row (replaces the old random bar chart)
+  chartRow: { height: 54, marginBottom: 6, alignItems: 'center', justifyContent: 'center' },
+  chartEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  chartEmptyText: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
+  chartCaption: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 18, textAlign: 'center' },
 
   heroDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 18 },
   statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
@@ -2902,7 +3041,6 @@ const styles = StyleSheet.create({
   assetInfo: { flex: 1 },
   assetSymbol: { fontSize: 14.5, fontFamily: FontFamily.heading, color: T.textPri },
   assetName: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2.5 },
-  sparklinePlaceholder: { width: 58, height: 34 },
   assetPriceCol: { alignItems: 'flex-end', gap: 6 },
   assetPrice: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri },
   changeBadge: { paddingHorizontal: 7.5, paddingVertical: 3, borderRadius: 7 },
@@ -2913,7 +3051,7 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
 
   skeletonValue: {
-    width: 190, height: 44, borderRadius: 11,
+    width: 190, height: 46, borderRadius: 11,
     backgroundColor: 'rgba(255,255,255,0.07)', marginBottom: 8,
   },
   deltaChip: {
@@ -3526,8 +3664,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
 import {
-  useProfile, useUpdateProfile, useChangePassword,
-  useSendPhoneOtp, useVerifyPhoneOtp, useLogout,
+  useProfile, useUpdateProfile, useChangePassword, useLogout,
 } from '../../hooks/useProfile';
 
 let BlurView: any = null;
@@ -3642,17 +3779,6 @@ function ProviderBadge({ provider }: { provider: Provider }) {
   );
 }
 
-function VerifiedBadge({ verified }: { verified: boolean }) {
-  return (
-    <View style={[styles.badge, { borderColor: verified ? 'rgba(61,220,151,0.28)' : T.hairline }]}>
-      <Ionicons name={verified ? 'checkmark-circle' : 'ellipse-outline'} size={12} color={verified ? T.gain : T.textTer} />
-      <Text style={[styles.badgeText, { color: verified ? T.gain : T.textTer }]}>
-        {verified ? 'Phone Verified' : 'Phone Unverified'}
-      </Text>
-    </View>
-  );
-}
-
 function InfoRow({ icon, label, value, valueColor, isLast }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; valueColor?: string; isLast?: boolean }) {
   return (
     <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
@@ -3707,11 +3833,11 @@ function SheetModal({ visible, onClose, title, children }: { visible: boolean; o
   );
 }
 
-function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType, placeholder }: any) {
+function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType, placeholder, editable = true }: any) {
   return (
     <View style={{ marginBottom: 14 }}>
       <Text style={styles.sheetInputLabel}>{label}</Text>
-      <View style={styles.sheetInputBox}>
+      <View style={[styles.sheetInputBox, !editable && styles.sheetInputBoxDisabled]}>
         <TextInput
           style={styles.sheetInputText}
           value={value}
@@ -3721,6 +3847,7 @@ function SheetInput({ label, value, onChangeText, secureTextEntry, keyboardType,
           placeholder={placeholder}
           placeholderTextColor={T.textTer}
           autoCapitalize="none"
+          editable={editable}
         />
       </View>
     </View>
@@ -3760,8 +3887,6 @@ export default function Profile() {
   const { profile: user, isLoading: profileLoading } = useProfile();
   const updateProfileMutation = useUpdateProfile();
   const changePasswordMutation = useChangePassword();
-  const sendOtpMutation = useSendPhoneOtp();
-  const verifyOtpMutation = useVerifyPhoneOtp();
   const logoutMutation = useLogout();
 
   const profile = useMemo(() => ({
@@ -3769,8 +3894,6 @@ export default function Profile() {
     name: user?.name ?? 'Trader',
     email: user?.email ?? '',
     provider: (user?.provider ?? 'LOCAL') as Provider,
-    phoneNumber: user?.phoneNumber ?? null,
-    phoneVerified: user?.phoneVerified ?? false,
     createdAt: user?.createdAt ?? new Date().toISOString(),
   }), [user]);
 
@@ -3778,18 +3901,11 @@ export default function Profile() {
 
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState(profile.name);
-  const [editEmail, setEditEmail] = useState(profile.email);
 
   const [pwdVisible, setPwdVisible] = useState(false);
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [confirmPwd, setConfirmPwd] = useState('');
-
-  const [phoneVisible, setPhoneVisible] = useState(false);
-  const [phoneStep, setPhoneStep] = useState<'enter' | 'otp'>('enter');
-  const [phoneInput, setPhoneInput] = useState(profile.phoneNumber ?? '');
-  const [otpInput, setOtpInput] = useState('');
-  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
 
   const memberSince = useMemo(() => {
     const d = new Date(profile.createdAt);
@@ -3803,31 +3919,33 @@ export default function Profile() {
 
   const openEdit = useCallback(() => {
     setEditName(profile.name);
-    setEditEmail(profile.email);
     setEditVisible(true);
-  }, [profile.name, profile.email]);
+  }, [profile.name]);
 
   const openPassword = useCallback(() => setPwdVisible(true), []);
 
-  const openPhone = useCallback(() => {
-    setPhoneInput(profile.phoneNumber ?? '');
-    setPhoneStep('enter');
-    setDevOtpHint(null);
-    setPhoneVisible(true);
-  }, [profile.phoneNumber]);
+  const goToTerms = useCallback(() => {
+    setSettingsVisible(false);
+    router.push('/legal/terms');
+  }, [router]);
+
+  const goToPrivacy = useCallback(() => {
+    setSettingsVisible(false);
+    router.push('/legal/privacy');
+  }, [router]);
 
   const handleSaveProfile = useCallback(() => {
-    if (!editName.trim() || !editEmail.trim()) {
-      return Alert.alert('Missing Fields', 'Name and email cannot be empty.');
+    if (!editName.trim()) {
+      return Alert.alert('Missing Field', 'Name cannot be empty.');
     }
     updateProfileMutation.mutate(
-      { name: editName.trim(), email: editEmail.trim() },
+      { name: editName.trim() },
       {
         onSuccess: () => setEditVisible(false),
         onError: (err: any) => Alert.alert('Update Failed', err.response?.data?.error || 'Something went wrong'),
       }
     );
-  }, [editName, editEmail, updateProfileMutation]);
+  }, [editName, updateProfileMutation]);
 
   const handleChangePassword = useCallback(() => {
     if (!currentPwd || !newPwd || !confirmPwd) {
@@ -3848,45 +3966,6 @@ export default function Profile() {
     );
   }, [currentPwd, newPwd, confirmPwd, changePasswordMutation]);
 
-  const handleSendOtp = useCallback(() => {
-    const cleaned = phoneInput.trim();
-    if (!cleaned) return Alert.alert('Missing Field', 'Enter a phone number first.');
-    if (!cleaned.startsWith('+')) {
-      return Alert.alert('Include Country Code', 'Enter your number with a country code, e.g. +923001234567.');
-    }
-    setDevOtpHint(null);
-    sendOtpMutation.mutate(cleaned, {
-      onSuccess: (data: any) => {
-        setPhoneStep('otp');
-        if (data?.otp) setDevOtpHint(String(data.otp));
-      },
-      onError: (err: any) => Alert.alert('Failed to Send Code', err.response?.data?.error || 'Something went wrong'),
-    });
-  }, [phoneInput, sendOtpMutation]);
-
-  const handleVerifyOtp = useCallback(() => {
-    if (!otpInput.trim()) return Alert.alert('Missing Field', 'Enter the code we sent you.');
-    verifyOtpMutation.mutate(
-      { phone: phoneInput.trim(), otp: otpInput.trim() },
-      {
-        onSuccess: () => {
-          setPhoneVisible(false);
-          setPhoneStep('enter');
-          setOtpInput('');
-          setDevOtpHint(null);
-        },
-        onError: (err: any) => Alert.alert('Verification Failed', err.response?.data?.error || 'Something went wrong'),
-      }
-    );
-  }, [phoneInput, otpInput, verifyOtpMutation]);
-
-  const closePhoneSheet = useCallback(() => {
-    setPhoneVisible(false);
-    setPhoneStep('enter');
-    setOtpInput('');
-    setDevOtpHint(null);
-  }, []);
-
   const handleLogout = useCallback(() => {
     Alert.alert('Log Out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
@@ -3896,8 +3975,6 @@ export default function Profile() {
 
   const saving = updateProfileMutation.isPending;
   const changingPwd = changePasswordMutation.isPending;
-  const sendingOtp = sendOtpMutation.isPending;
-  const verifyingOtp = verifyOtpMutation.isPending;
 
   return (
     <View style={styles.root}>
@@ -3937,7 +4014,6 @@ export default function Profile() {
 
               <View style={styles.badgeRow}>
                 <ProviderBadge provider={profile.provider} />
-                <VerifiedBadge verified={profile.phoneVerified} />
               </View>
             </View>
 
@@ -3964,14 +4040,7 @@ export default function Profile() {
           <SectionLabel text="Personal Information" />
           <GlassPanel style={styles.infoPanel} intensity={24}>
             <InfoRow icon="person-outline" label="Full Name" value={profile.name} />
-            <InfoRow icon="mail-outline" label="Email Address" value={profile.email} />
-            <InfoRow
-              icon="call-outline"
-              label="Phone Number"
-              value={profile.phoneNumber ?? 'Not added'}
-              valueColor={profile.phoneVerified ? T.gain : undefined}
-              isLast
-            />
+            <InfoRow icon="mail-outline" label="Email Address" value={profile.email} isLast />
           </GlassPanel>
         </Animated.View>
 
@@ -3982,18 +4051,21 @@ export default function Profile() {
               icon="lock-closed-outline"
               label="Password"
               value={profile.provider === 'LOCAL' ? 'Set' : 'Managed by Google'}
-            />
-            <InfoRow
-              icon="shield-checkmark-outline"
-              label="Two-Step Verification"
-              value={profile.phoneVerified ? 'Enabled' : 'Not enabled'}
-              valueColor={profile.phoneVerified ? T.gain : undefined}
               isLast
             />
           </GlassPanel>
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(230).springify().damping(16)} style={{ marginTop: 6 }}>
+        <Animated.View entering={FadeInDown.delay(220).springify().damping(16)}>
+          <SectionLabel text="Legal" />
+          <GlassPanel style={styles.infoPanel} intensity={24}>
+            <SettingsMenuRow icon="document-text-outline" label="Terms & Conditions" onPress={goToTerms} />
+            <View style={styles.menuRowDivider} />
+            <SettingsMenuRow icon="shield-outline" label="Privacy Policy" onPress={goToPrivacy} />
+          </GlassPanel>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(250).springify().damping(16)} style={{ marginTop: 6 }}>
           <Pressy onPress={handleLogout}>
             <GlassPanel style={styles.logoutPanel} intensity={20}>
               <Ionicons name="log-out-outline" size={17} color={T.loss} />
@@ -4004,7 +4076,7 @@ export default function Profile() {
       </ScrollView>
 
       <SheetModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} title="Account Settings">
-        <SettingsMenuRow icon="person-outline" label="Edit Profile" sublabel="Name and email address" onPress={() => openFromMenu(openEdit)} />
+        <SettingsMenuRow icon="person-outline" label="Edit Profile" sublabel="Update your display name" onPress={() => openFromMenu(openEdit)} />
         <SettingsMenuRow
           icon="lock-closed-outline"
           label="Change Password"
@@ -4012,12 +4084,14 @@ export default function Profile() {
           onPress={() => openFromMenu(openPassword)}
           disabled={profile.provider === 'GOOGLE'}
         />
-        <SettingsMenuRow icon="call-outline" label="Phone Number" sublabel={profile.phoneNumber ? 'Update or re-verify' : 'Add and verify a number'} onPress={() => openFromMenu(openPhone)} />
+        <SettingsMenuRow icon="document-text-outline" label="Terms & Conditions" onPress={goToTerms} />
+        <SettingsMenuRow icon="shield-outline" label="Privacy Policy" onPress={goToPrivacy} />
       </SheetModal>
 
       <SheetModal visible={editVisible} onClose={() => setEditVisible(false)} title="Edit Profile">
         <SheetInput label="Full Name" value={editName} onChangeText={setEditName} placeholder="Your name" />
-        <SheetInput label="Email Address" value={editEmail} onChangeText={setEditEmail} placeholder="you@example.com" keyboardType="email-address" />
+        <SheetInput label="Email Address" value={profile.email} onChangeText={() => {}} editable={false} />
+        <Text style={styles.sheetHint}>Your email address is your account identifier and can't be changed here. Contact support if you need to update it.</Text>
         <SheetPrimaryButton label="Save Changes" onPress={handleSaveProfile} loading={saving} />
       </SheetModal>
 
@@ -4027,28 +4101,6 @@ export default function Profile() {
         <SheetInput label="Confirm New Password" value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry placeholder="••••••••" />
         <Text style={styles.sheetHint}>Min 8 characters, with uppercase, lowercase, a number and a symbol.</Text>
         <SheetPrimaryButton label="Update Password" onPress={handleChangePassword} loading={changingPwd} />
-      </SheetModal>
-
-      <SheetModal visible={phoneVisible} onClose={closePhoneSheet} title={phoneStep === 'enter' ? 'Add Phone Number' : 'Verify Code'}>
-        {phoneStep === 'enter' ? (
-          <>
-            <SheetInput label="Phone Number" value={phoneInput} onChangeText={setPhoneInput} placeholder="+923001234567" keyboardType="phone-pad" />
-            <Text style={styles.sheetHint}>Include your country code, starting with a plus sign.</Text>
-            <SheetPrimaryButton label="Send Code" onPress={handleSendOtp} loading={sendingOtp} />
-          </>
-        ) : (
-          <>
-            <Text style={styles.sheetHint}>We sent a 6-digit code to {phoneInput}.</Text>
-            {devOtpHint && (
-              <View style={styles.devHintBox}>
-                <Ionicons name="information-circle-outline" size={14} color={T.gold} />
-                <Text style={styles.devHintText}>Development code: {devOtpHint}</Text>
-              </View>
-            )}
-            <SheetInput label="Verification Code" value={otpInput} onChangeText={setOtpInput} placeholder="••••••" keyboardType="number-pad" />
-            <SheetPrimaryButton label="Verify Phone" onPress={handleVerifyOtp} loading={verifyingOtp} />
-          </>
-        )}
       </SheetModal>
     </View>
   );
@@ -4099,6 +4151,8 @@ const styles = StyleSheet.create({
   infoLabel: { fontSize: 13, fontFamily: FontFamily.bodyMedium, color: T.textSec },
   infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, maxWidth: '48%', textAlign: 'right' },
 
+  menuRowDivider: { height: 1, backgroundColor: T.hairline },
+
   logoutPanel: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.2)', paddingVertical: 16 },
   logoutText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
 
@@ -4110,11 +4164,9 @@ const styles = StyleSheet.create({
 
   sheetInputLabel: { fontSize: 11, fontFamily: FontFamily.bodyMedium, color: T.textTer, letterSpacing: 0.4, marginBottom: 7 },
   sheetInputBox: { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 13, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 14 },
+  sheetInputBoxDisabled: { opacity: 0.5 },
   sheetInputText: { fontSize: 14, fontFamily: FontFamily.body, color: T.textPri, paddingVertical: 13 },
   sheetHint: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, lineHeight: 16, marginBottom: 14 },
-
-  devHintBox: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(232,182,86,0.1)', borderWidth: 1, borderColor: 'rgba(232,182,86,0.24)', borderRadius: 10, paddingHorizontal: 11, paddingVertical: 9, marginBottom: 14 },
-  devHintText: { fontSize: 11.5, fontFamily: FontFamily.bodyMedium, color: T.gold },
 
   sheetPrimaryBtn: { height: 50, borderRadius: 15, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
   sheetPrimaryBtnText: { fontSize: 14, fontFamily: FontFamily.heading, color: '#fff', letterSpacing: 0.2 },
@@ -4304,11 +4356,12 @@ const PairPill = memo(PairPillBase, (prev, next) =>
 );
 
 function MiniOrderBook({
-  book, loading, currentPrice,
+  book, loading, currentPrice, onSelectPrice,
 }: {
   book: OrderBook | undefined;
   loading: boolean;
   currentPrice: number;
+  onSelectPrice?: (price: number) => void;
 }) {
   const bids = book?.bids ?? [];
   const asks = book?.asks ?? [];
@@ -4352,11 +4405,16 @@ function MiniOrderBook({
         <Text style={[styles.obLabel, { textAlign: 'right' }]}>Amount</Text>
       </View>
       {displayAsks.map((a, i) => (
-        <View key={`ask-${a.price}-${i}`} style={styles.obRow}>
+        <TouchableOpacity
+          key={`ask-${a.price}-${i}`}
+          style={styles.obRow}
+          activeOpacity={onSelectPrice ? 0.6 : 1}
+          onPress={() => onSelectPrice?.(a.price)}
+        >
           <View style={[styles.obFill, { width: `${(a.amount / maxAmount) * 100}%`, backgroundColor: T.loss + '1A' }]} />
           <Text style={[styles.obPrice, { color: T.loss }]}>{fmt(a.price)}</Text>
           <Text style={styles.obAmount}>{a.amount.toFixed(4)}</Text>
-        </View>
+        </TouchableOpacity>
       ))}
       <View style={styles.obSpread}>
         <Text style={styles.obSpreadLabel}>Spread</Text>
@@ -4365,11 +4423,16 @@ function MiniOrderBook({
         </Text>
       </View>
       {bids.map((b, i) => (
-        <View key={`bid-${b.price}-${i}`} style={styles.obRow}>
+        <TouchableOpacity
+          key={`bid-${b.price}-${i}`}
+          style={styles.obRow}
+          activeOpacity={onSelectPrice ? 0.6 : 1}
+          onPress={() => onSelectPrice?.(b.price)}
+        >
           <View style={[styles.obFill, { width: `${(b.amount / maxAmount) * 100}%`, backgroundColor: T.gain + '1A' }]} />
           <Text style={[styles.obPrice, { color: T.gain }]}>{fmt(b.price)}</Text>
           <Text style={styles.obAmount}>{b.amount.toFixed(4)}</Text>
-        </View>
+        </TouchableOpacity>
       ))}
     </View>
   );
@@ -4591,6 +4654,27 @@ export default function Trade() {
   const usdtBalance = walletBalances['USDT'] ?? 0;
   const baseBalance = walletBalances[selectedPair.base] ?? 0;
 
+  // How much of the relevant asset this order actually needs, and whether
+  // the wallet can cover it — this is the check a real exchange runs before
+  // ever letting you submit, not just a display-only balance strip.
+  const requiredAmount = useMemo(() => {
+    const amt = parseFloat(amountInput) || 0;
+    if (side === 'SELL') return amt;
+    const p = orderKind === 'MARKET' ? marketRefPrice : (parseFloat(priceInput) || 0);
+    return amt * p;
+  }, [side, amountInput, orderKind, marketRefPrice, priceInput]);
+
+  const availableBalance = side === 'BUY' ? usdtBalance : baseBalance;
+  const availableAssetLabel = side === 'BUY' ? 'USDT' : selectedPair.base;
+  const hasEnteredAmount = (parseFloat(amountInput) || 0) > 0;
+  const insufficientBalance = hasEnteredAmount && requiredAmount > availableBalance;
+
+  const handleSelectBookPrice = useCallback((price: number) => {
+    if (orderKind !== 'LIMIT') setOrderKind('LIMIT');
+    setPriceInput(price >= 1000 ? price.toFixed(2) : price.toFixed(4));
+    hasAutoFilledRef.current = true;
+  }, [orderKind]);
+
   const quickAmountPcts = useMemo(() => [0.25, 0.5, 0.75, 1.0], []);
 
   const handleQuickPct = useCallback((pct: number) => {
@@ -4628,6 +4712,16 @@ export default function Trade() {
       executionPrice = price;
     }
 
+    const requiredForSubmit = side === 'SELL' ? amount : amount * executionPrice;
+    const availableForSubmit = side === 'BUY' ? usdtBalance : baseBalance;
+    if (requiredForSubmit > availableForSubmit) {
+      Alert.alert(
+        'Insufficient Balance',
+        `You need ${requiredForSubmit.toFixed(side === 'BUY' ? 2 : 6)} ${side === 'BUY' ? 'USDT' : selectedPair.base} but only have ${availableForSubmit.toFixed(side === 'BUY' ? 2 : 6)} available.`
+      );
+      return;
+    }
+
     try {
       await placeOrder.mutateAsync({
         asset: selectedPair.symbol,
@@ -4642,7 +4736,7 @@ export default function Trade() {
     } catch (err: any) {
       Alert.alert('Order Failed', err.response?.data?.error ?? 'Could not reach the order service.');
     }
-  }, [orderKind, amountInput, priceInput, marketRefPrice, selectedPair.symbol, side, placeOrder]);
+  }, [orderKind, amountInput, priceInput, marketRefPrice, selectedPair.symbol, selectedPair.base, side, placeOrder, usdtBalance, baseBalance]);
 
   const handlePairSelect = useCallback((pair: typeof PAIRS[0]) => {
     setSelectedPair(pair);
@@ -4923,8 +5017,13 @@ export default function Trade() {
                   </View>
 
                                     <View style={styles.inputGroup}>
-                    <Text style={styles.inputLabel}>Amount ({selectedPair.base})</Text>
-                    <View style={styles.inputRow}>
+                    <View style={styles.inputLabelRow}>
+                      <Text style={styles.inputLabel}>Amount ({selectedPair.base})</Text>
+                      <Text style={styles.availableText}>
+                        Avbl {availableBalance.toLocaleString('en-US', { maximumFractionDigits: side === 'BUY' ? 2 : 6 })} {availableAssetLabel}
+                      </Text>
+                    </View>
+                    <View style={[styles.inputRow, insufficientBalance && styles.inputRowError]}>
                       <TextInput
                         style={styles.input}
                         value={amountInput}
@@ -4935,12 +5034,17 @@ export default function Trade() {
                       />
                       <Text style={styles.inputUnit}>{selectedPair.base}</Text>
                     </View>
+                    {insufficientBalance && (
+                      <Text style={styles.insufficientText}>
+                        Insufficient {availableAssetLabel} balance
+                      </Text>
+                    )}
                   </View>
 
                                     <View style={styles.pctRow}>
                     {quickAmountPcts.map((pct) => (
                       <TouchableOpacity key={pct} style={styles.pctBtn} onPress={() => handleQuickPct(pct)}>
-                        <Text style={styles.pctBtnText}>{Math.round(pct * 100)}%</Text>
+                        <Text style={styles.pctBtnText}>{pct === 1 ? 'MAX' : `${Math.round(pct * 100)}%`}</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -4960,8 +5064,11 @@ export default function Trade() {
                       onPressIn={() => { btnScale.value = withSpring(0.97, { damping: 14 }); }}
                       onPressOut={() => { btnScale.value = withSpring(1, { damping: 10 }); }}
                       onPress={handlePlaceOrder}
-                      disabled={submitting || (orderKind === 'MARKET' && !marketRefPrice)}
-                      style={[styles.submitBtnWrap, (orderKind === 'MARKET' && !marketRefPrice) && { opacity: 0.5 }]}
+                      disabled={submitting || insufficientBalance || (orderKind === 'MARKET' && !marketRefPrice)}
+                      style={[
+                        styles.submitBtnWrap,
+                        ((orderKind === 'MARKET' && !marketRefPrice) || insufficientBalance) && { opacity: 0.5 },
+                      ]}
                     >
                       <LinearGradient
                         colors={side === 'BUY'
@@ -4974,12 +5081,12 @@ export default function Trade() {
                         {submitting ? (
                           <ActivityIndicator color="#fff" size="small" />
                         ) : submitSuccess ? (
-                          <Text style={styles.submitBtnText}>✓ Order Placed</Text>
+                          <Text style={styles.submitBtnText}>Order Placed</Text>
+                        ) : insufficientBalance ? (
+                          <Text style={styles.submitBtnText}>Insufficient Balance</Text>
                         ) : (
                           <Text style={styles.submitBtnText}>
-                            {side === 'BUY'
-                              ? `▲ Place Buy ${orderKind === 'MARKET' ? 'Market' : 'Limit'} Order`
-                              : `▼ Place Sell ${orderKind === 'MARKET' ? 'Market' : 'Limit'} Order`}
+                            {side === 'BUY' ? `Buy ${selectedPair.base}` : `Sell ${selectedPair.base}`}
                           </Text>
                         )}
                       </LinearGradient>
@@ -5007,8 +5114,9 @@ export default function Trade() {
                     <View style={styles.sectionAccentBar} />
                     <Text style={styles.obTitle}>Order Book</Text>
                     <Text style={styles.obSubtitle}>{selectedPair.base}/USDT</Text>
+                    <Text style={styles.obHint}>Tap a price to fill</Text>
                   </View>
-                  <MiniOrderBook book={orderBook} loading={loadingBook} currentPrice={selectedLivePrice} />
+                  <MiniOrderBook book={orderBook} loading={loadingBook} currentPrice={selectedLivePrice} onSelectPrice={handleSelectBookPrice} />
                 </GlassPanel>
               </Animated.View>
             </View>
@@ -5124,6 +5232,10 @@ const styles = StyleSheet.create({
 
   inputGroup: { marginBottom: 14 },
   inputLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7, marginBottom: 7 },
+  inputLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 },
+  availableText: { fontSize: 9, fontFamily: FontFamily.bodyMedium, color: T.textSec },
+  insufficientText: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.loss, marginTop: 6 },
+  inputRowError: { borderColor: T.loss + '60' },
   inputRow: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.03)',
@@ -5172,6 +5284,7 @@ const styles = StyleSheet.create({
   sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
   obTitle: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
   obSubtitle: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, marginLeft: 2 },
+  obHint: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, marginLeft: 'auto' },
   orderBook: { gap: 2 },
   obHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   obLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.5 },
@@ -5263,6 +5376,7 @@ import { useWallet } from '../../hooks/useWallet';
 import { useTransferFunds, useWalletTransfers, type WalletTransferRecord } from '../../hooks/useWallet';
 import { useWalletStore, PRICE_MAP } from '../../stores/walletStore';
 import { useMarketStore } from '../../stores/marketStore';
+import { useTicker24h } from '../../hooks/useTicker24h';
 import {
   useFundingHistory,
   useCreateDepositIntent,
@@ -5307,11 +5421,24 @@ const ASSET_META: Record<string, { name: string; color: string; symbol: string }
   ADA:   { name: 'Cardano',   color: '#5C7CFA', symbol: 'A' },
   DOGE:  { name: 'Dogecoin',  color: '#E0C354', symbol: 'D' },
   AVAX:  { name: 'Avalanche', color: '#F06A6E', symbol: 'A' },
+  DOT:   { name: 'Polkadot',  color: '#F25CA8', symbol: 'D' },
+  LINK:  { name: 'Chainlink', color: '#6D8DF2', symbol: 'L' },
+  NEAR:  { name: 'NEAR Protocol', color: '#5CDDB0', symbol: 'N' },
+  APT:   { name: 'Aptos',     color: '#5CECBF', symbol: 'A' },
+  INJ:   { name: 'Injective', color: '#5ECEFF', symbol: 'I' },
+  ARB:   { name: 'Arbitrum',  color: '#6FB6F2', symbol: 'A' },
 };
 
 const FIAT_ASSETS = new Set(['USDT', 'USDC']);
-const MODAL_ASSETS = ['USDT', 'BTC', 'ETH', 'BNB', 'SOL'] as const;
-const CRYPTO_ASSETS = ['BTC', 'ETH', 'BNB', 'SOL'] as const;
+const CRYPTO_ASSETS = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK', 'NEAR', 'APT', 'INJ', 'ARB'] as const;
+const MODAL_ASSETS = ['USDT', ...CRYPTO_ASSETS] as const;
+
+function formatAssetAmount(balance: number): string {
+  if (!balance || balance <= 0) return '0';
+  if (balance < 0.001) return balance.toFixed(6);
+  if (balance < 1) return balance.toFixed(4);
+  return balance.toFixed(2);
+}
 
 type HistoryItem = {
   id: string;
@@ -5450,6 +5577,8 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
   const { refetch: refetchFundingHistory } = useFundingHistory();
   const transactions = useFundingStore((s) => s.transactions);
+  const walletBalances = useWalletStore((s) => s.balances);
+  const availableBalance = walletBalances[asset] ?? 0;
 
   const loading =
     createDepositIntent.isPending ||
@@ -5476,7 +5605,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
     }
   }, [visible]);
 
-  // Poll the server every 2s while we're waiting on a deposit to clear
   useEffect(() => {
     if (!processingId) return;
     const interval = setInterval(() => {
@@ -5485,7 +5613,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
     return () => clearInterval(interval);
   }, [processingId, refetchFundingHistory]);
 
-  // Watch the store for the processing transaction flipping to COMPLETED/FAILED
   useEffect(() => {
     if (!processingId) return;
     const tx = transactions.find((t) => t.id === processingId);
@@ -5552,7 +5679,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
       return;
     }
 
-    // Card was charged successfully — now wait for the webhook to clear the deposit
     setProcessingId(transactionId);
     setProcessingStatus('PENDING');
   }, [initPaymentSheet, presentPaymentSheet]);
@@ -5592,7 +5718,6 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
         const { transaction } = await createDepositIntent.mutateAsync({ asset, amount, type });
 
         if (transaction.type === 'FIAT_STRIPE' && transaction.stripeClientSecret) {
-          // Native card form opens immediately; no intermediate "intent ready" screen needed
           await startCardPayment(transaction.stripeClientSecret, transaction.id);
           return;
         }
@@ -5848,10 +5973,18 @@ function FundingModal({ visible, mode, onClose, onSuccess }: {
                         returnKeyType="done"
                         onSubmitEditing={Keyboard.dismiss}
                       />
-                      <TouchableOpacity onPress={() => setAmount('100')} style={styles.maxBtn}>
-                        <Text style={styles.maxText}>MAX</Text>
-                      </TouchableOpacity>
+                      {mode === 'withdraw' && (
+                        <TouchableOpacity onPress={() => setAmount(formatAssetAmount(availableBalance))} style={styles.maxBtn}>
+                          <Text style={styles.maxText}>MAX</Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
+
+                    {mode === 'withdraw' && (
+                      <Text style={styles.availableBalanceText}>
+                        Available: {formatAssetAmount(availableBalance)} {asset}
+                      </Text>
+                    )}
 
                     <View style={styles.sheetInfoRow}>
                       <Text style={styles.sheetInfoLabel}>Network fee</Text>
@@ -5906,6 +6039,8 @@ function TransferModal({ visible, onClose, onSuccess }: {
   const [amount, setAmount] = useState('');
 
   const transferFunds = useTransferFunds();
+  const walletBalances = useWalletStore((s) => s.balances);
+  const availableBalance = walletBalances[asset] ?? 0;
 
   const translateY = useSharedValue(600);
   const backdropOp = useSharedValue(0);
@@ -6047,10 +6182,13 @@ function TransferModal({ visible, onClose, onSuccess }: {
                     returnKeyType="done"
                     onSubmitEditing={Keyboard.dismiss}
                   />
-                  <TouchableOpacity onPress={() => setAmount('100')} style={styles.maxBtn}>
+                  <TouchableOpacity onPress={() => setAmount(formatAssetAmount(availableBalance))} style={styles.maxBtn}>
                     <Text style={styles.maxText}>MAX</Text>
                   </TouchableOpacity>
                 </View>
+                <Text style={styles.availableBalanceText}>
+                  Available: {formatAssetAmount(availableBalance)} {asset}
+                </Text>
 
                 <View style={styles.sheetInfoRow}>
                   <Text style={styles.sheetInfoLabel}>Processing time</Text>
@@ -6237,12 +6375,15 @@ function sortHistoryItems(items: HistoryItem[]) {
 export default function Wallet() {
   const insets = useSafeAreaInsets();
 
-  const { isLoading, isFetching, refetch } = useWallet();
+  const { isLoading, refetch } = useWallet();
   const { isLoading: transferHistoryLoading, refetch: refetchTransfers, data: transferRecords = [] } = useWalletTransfers();
 
   const balances = useWalletStore((s) => s.balances);
   const totalUsd = useWalletStore((s) => s.totalUsd);
   const marketPrices = useMarketStore((s) => s.prices);
+  const ticker24h = useMarketStore((s) => s.ticker24h);
+
+  useTicker24h();
 
   const livePrices = useMemo(() => {
     const out: Record<string, number> = {};
@@ -6281,8 +6422,6 @@ export default function Wallet() {
     [balances]
   );
 
-  // Total wallet PnL: sum of each holding's 24h dollar move, derived from
-  // its current USD value and the market's 24h change percent.
   const portfolioPnl = useMemo(() => {
     let pnlUsd = 0;
     let prevTotal = 0;
@@ -6290,11 +6429,7 @@ export default function Wallet() {
     for (const [asset, balance] of assetList) {
       const price = livePrices[asset] ?? PRICE_MAP[asset] ?? 0;
       const usdValue = balance * price;
-      const marketData: any = marketPrices[`${asset}USDT`];
-      const changePercent = marketData?.changePercent24h
-        ?? marketData?.priceChangePercent
-        ?? marketData?.change24h
-        ?? 0;
+      const changePercent = FIAT_ASSETS.has(asset) ? 0 : (ticker24h[`${asset}USDT`]?.change ?? 0);
       const prevValue = changePercent ? usdValue / (1 + changePercent / 100) : usdValue;
       pnlUsd += usdValue - prevValue;
       prevTotal += prevValue;
@@ -6302,7 +6437,7 @@ export default function Wallet() {
 
     const pnlPercent = prevTotal > 0 ? (pnlUsd / prevTotal) * 100 : 0;
     return { pnlUsd, pnlPercent };
-  }, [assetList, livePrices, marketPrices]);
+  }, [assetList, livePrices, ticker24h]);
 
   const openDeposit = useCallback(() => {
     setModalMode('deposit');
@@ -6333,10 +6468,15 @@ export default function Wallet() {
     refetchTransfers();
   }, [refetch, refetchHistory, refetchTransfers]);
 
-  const onRefresh = useCallback(() => {
-    refetch();
-    refetchHistory();
-    refetchTransfers();
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setIsManualRefreshing(true);
+    try {
+      await Promise.all([refetch(), refetchHistory(), refetchTransfers()]);
+    } finally {
+      setIsManualRefreshing(false);
+    }
   }, [refetch, refetchHistory, refetchTransfers]);
 
   const handleSectionAssets = useCallback(() => setActiveSection('assets'), []);
@@ -6357,7 +6497,7 @@ export default function Wallet() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={isFetching && !isLoading}
+            refreshing={isManualRefreshing}
             onRefresh={onRefresh}
             tintColor={T.accent}
           />
@@ -6736,6 +6876,7 @@ const styles = StyleSheet.create({
   amountInput: { flex: 1, fontSize: 22, fontFamily: FontFamily.heading, color: T.textPri },
   maxBtn: { backgroundColor: T.accentDeep + '30', borderRadius: 7, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1, borderColor: T.accent + '40' },
   maxText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 1 },
+  availableBalanceText: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, marginTop: -10, marginBottom: 16 },
   sheetInfoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   sheetInfoLabel: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
   sheetInfoValue: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textSec },
@@ -6767,6 +6908,320 @@ const styles = StyleSheet.create({
   },
   intentAddressLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textTer, marginBottom: 8, letterSpacing: 0.7 },
   intentAddressText: { fontSize: 12, fontFamily: FontFamily.body, color: T.textPri, lineHeight: 17 },
+});
+</file>
+
+<file path="app/legal/privacy.tsx">
+import { memo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { FontFamily } from '../../constants/typography';
+
+let BlurView: any = null;
+try { BlurView = require('expo-blur').BlurView; } catch {}
+
+const T = {
+  bg0: '#06070A',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
+  accent: '#7C8AFF',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
+};
+
+const GlassPanel = memo(function GlassPanel({ style, children, intensity = 24 }: any) {
+  if (BlurView) {
+    return (
+      <View style={[style, { overflow: 'hidden' }]}>
+        <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
+        {children}
+      </View>
+    );
+  }
+  return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
+});
+
+function Section({ index, title, children }: { index: number; title: string; children: React.ReactNode }) {
+  return (
+    <Animated.View entering={FadeInDown.delay(80 + index * 30).springify().damping(16)} style={styles.section}>
+      <View style={styles.sectionHeaderRow}>
+        <View style={styles.sectionNumberBadge}>
+          <Text style={styles.sectionNumberText}>{index}</Text>
+        </View>
+        <Text style={styles.sectionTitle}>{title}</Text>
+      </View>
+      <Text style={styles.sectionBody}>{children}</Text>
+    </Animated.View>
+  );
+}
+
+export default function PrivacyPolicy() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+
+  return (
+    <View style={styles.root}>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 60 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View entering={FadeIn.duration(400)} style={styles.topBar}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+            <Ionicons name="chevron-back" size={20} color={T.textPri} />
+          </TouchableOpacity>
+          <Text style={styles.topBarTitle}>Privacy Policy</Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(40).springify().damping(16)} style={styles.introWrap}>
+          <GlassPanel style={styles.introPanel} intensity={22}>
+            <Text style={styles.introText}>
+              This Privacy Policy explains what information NexusTrade collects, how it's used, and
+              the choices you have. By using the app, you agree to the practices described here.
+            </Text>
+          </GlassPanel>
+        </Animated.View>
+
+        <Section index={1} title="Information We Collect">
+          We collect information you provide directly, such as your name, email address, and
+          password, when you create an account. We also collect information generated through your
+          use of the app, such as order history, wallet balances, and device/session information used
+          to keep your account secure.
+        </Section>
+
+        <Section index={2} title="How We Use Your Information">
+          We use your information to operate your account, process trades, maintain wallet balances,
+          provide customer support, and improve the app's features and reliability. We do not sell
+          your personal information to third parties.
+        </Section>
+
+        <Section index={3} title="Account Credentials">
+          Your password is stored using industry-standard one-way hashing and is never stored or
+          transmitted in plain text. Your email address is used as your primary account identifier for
+          login and account recovery, which is why it cannot be changed directly from within the app.
+        </Section>
+
+        <Section index={4} title="Data Sharing">
+          We may share limited information with service providers who help us operate the app — for
+          example, infrastructure and hosting providers — under obligations to protect that
+          information. We may also disclose information if required to do so by law.
+        </Section>
+
+        <Section index={5} title="Data Retention">
+          We retain account and transaction information for as long as your account is active, and
+          for a reasonable period afterward as needed to comply with legal obligations, resolve
+          disputes, and enforce our agreements.
+        </Section>
+
+        <Section index={6} title="Your Choices">
+          You can update your display name at any time from your profile. If you'd like your account
+          or personal data removed, or your email address changed, please contact support and we'll
+          assist you with the request.
+        </Section>
+
+        <Section index={7} title="Security">
+          We use reasonable technical and organizational measures designed to protect your
+          information. However, no method of transmission or storage is completely secure, and we
+          cannot guarantee absolute security.
+        </Section>
+
+        <Section index={8} title="Changes to This Policy">
+          We may update this Privacy Policy periodically. If we make material changes, we'll let you
+          know through the app. Continued use of NexusTrade after changes take effect constitutes
+          acceptance of the updated policy.
+        </Section>
+
+        <Section index={9} title="Contact">
+          If you have questions about this Privacy Policy or how your data is handled, please reach
+          out through the support channels provided within the app.
+        </Section>
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: T.bg0 },
+  scroll: { paddingHorizontal: 18 },
+
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  iconBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
+  topBarTitle: { fontSize: 15.5, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2, justifyContent: 'center', flex: 1, textAlign: 'center' },
+
+  introWrap: { marginBottom: 20, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  introPanel: { borderRadius: 20, padding: 17, borderWidth: 1, borderColor: T.glassBorderHi },
+  introText: { fontSize: 12.5, fontFamily: FontFamily.body, color: T.textSec, lineHeight: 19 },
+
+  section: { marginBottom: 20 },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  sectionNumberBadge: { width: 24, height: 24, borderRadius: 8, backgroundColor: 'rgba(124,138,255,0.14)', borderWidth: 1, borderColor: 'rgba(124,138,255,0.3)', justifyContent: 'center', alignItems: 'center' },
+  sectionNumberText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.accent },
+  sectionTitle: { fontSize: 14, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.1, flex: 1 },
+  sectionBody: { fontSize: 12.5, fontFamily: FontFamily.body, color: T.textSec, lineHeight: 19, marginLeft: 34 },
+});
+</file>
+
+<file path="app/legal/terms.tsx">
+import { memo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { FontFamily } from '../../constants/typography';
+
+let BlurView: any = null;
+try { BlurView = require('expo-blur').BlurView; } catch {}
+
+const T = {
+  bg0: '#06070A',
+  glass: 'rgba(255,255,255,0.04)',
+  glassUp: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassBorderHi: 'rgba(255,255,255,0.16)',
+  hairline: 'rgba(255,255,255,0.07)',
+  accent: '#7C8AFF',
+  textPri: '#F7F8FA',
+  textSec: '#9CA1B0',
+  textTer: '#60657A',
+};
+
+const GlassPanel = memo(function GlassPanel({ style, children, intensity = 24 }: any) {
+  if (BlurView) {
+    return (
+      <View style={[style, { overflow: 'hidden' }]}>
+        <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,13,18,0.5)' }]} />
+        {children}
+      </View>
+    );
+  }
+  return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
+});
+
+function Section({ index, title, children }: { index: number; title: string; children: React.ReactNode }) {
+  return (
+    <Animated.View entering={FadeInDown.delay(80 + index * 30).springify().damping(16)} style={styles.section}>
+      <View style={styles.sectionHeaderRow}>
+        <View style={styles.sectionNumberBadge}>
+          <Text style={styles.sectionNumberText}>{index}</Text>
+        </View>
+        <Text style={styles.sectionTitle}>{title}</Text>
+      </View>
+      <Text style={styles.sectionBody}>{children}</Text>
+    </Animated.View>
+  );
+}
+
+export default function TermsAndConditions() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+
+  return (
+    <View style={styles.root}>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 60 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View entering={FadeIn.duration(400)} style={styles.topBar}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+            <Ionicons name="chevron-back" size={20} color={T.textPri} />
+          </TouchableOpacity>
+          <Text style={styles.topBarTitle}>Terms & Conditions</Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(40).springify().damping(16)} style={styles.introWrap}>
+          <GlassPanel style={styles.introPanel} intensity={22}>
+            <Text style={styles.introText}>
+              These Terms govern your access to and use of NexusTrade. By creating an account or using
+              the app, you agree to be bound by them. Please read them carefully. This document was
+              last updated and is provided for general informational purposes as part of the app
+              experience.
+            </Text>
+          </GlassPanel>
+        </Animated.View>
+
+        <Section index={1} title="Acceptance of Terms">
+          By registering for or using NexusTrade in any way, you confirm that you are at least 18
+          years old, that you have the legal capacity to enter into a binding agreement, and that you
+          accept these Terms in full. If you do not agree with any part of these Terms, you must not
+          use the app.
+        </Section>
+
+        <Section index={2} title="Your Account">
+          You are responsible for maintaining the confidentiality of your login credentials and for
+          all activity that occurs under your account. Your email address is used as your account
+          identifier and cannot be changed directly within the app — contact support if it needs to
+          be updated. Notify us immediately if you suspect any unauthorized use of your account.
+        </Section>
+
+        <Section index={3} title="Trading & Market Data">
+          Prices, charts, and order execution shown in the app may rely on simulated or delayed
+          liquidity for demonstration purposes. Market conditions can change rapidly, and past
+          performance is not indicative of future results. You are solely responsible for any
+          decisions made based on information presented in the app.
+        </Section>
+
+        <Section index={4} title="Orders & Settlement">
+          Placing an order reserves the required funds from your available balance. Market orders
+          execute only against liquidity available at the time of placement; any unfilled portion is
+          not charged and is released back to your available balance. Limit orders may rest until
+          filled or cancelled, during which the corresponding funds remain reserved.
+        </Section>
+
+        <Section index={5} title="Prohibited Conduct">
+          You agree not to misuse the app, including attempting to interfere with its normal
+          operation, reverse-engineering its systems, manipulating market data, or using the service
+          for any unlawful purpose. We reserve the right to suspend or terminate accounts that violate
+          this policy.
+        </Section>
+
+        <Section index={6} title="Limitation of Liability">
+          NexusTrade is provided on an "as is" and "as available" basis. To the fullest extent
+          permitted by law, we disclaim liability for any indirect, incidental, or consequential
+          damages arising from your use of the app, including losses related to trading activity.
+        </Section>
+
+        <Section index={7} title="Changes to These Terms">
+          We may update these Terms from time to time to reflect changes in our services or legal
+          requirements. Continued use of the app after changes take effect constitutes acceptance of
+          the revised Terms.
+        </Section>
+
+        <Section index={8} title="Contact">
+          If you have questions about these Terms, please reach out through the support channels
+          provided within the app.
+        </Section>
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: T.bg0 },
+  scroll: { paddingHorizontal: 18 },
+
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  iconBtn: { width: 38, height: 38, borderRadius: 13, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center' },
+  topBarTitle: { fontSize: 15.5, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.2, justifyContent: 'center', flex: 1, textAlign: 'center' },
+
+  introWrap: { marginBottom: 20, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  introPanel: { borderRadius: 20, padding: 17, borderWidth: 1, borderColor: T.glassBorderHi },
+  introText: { fontSize: 12.5, fontFamily: FontFamily.body, color: T.textSec, lineHeight: 19 },
+
+  section: { marginBottom: 20 },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  sectionNumberBadge: { width: 24, height: 24, borderRadius: 8, backgroundColor: 'rgba(124,138,255,0.14)', borderWidth: 1, borderColor: 'rgba(124,138,255,0.3)', justifyContent: 'center', alignItems: 'center' },
+  sectionNumberText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.accent },
+  sectionTitle: { fontSize: 14, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.1, flex: 1 },
+  sectionBody: { fontSize: 12.5, fontFamily: FontFamily.body, color: T.textSec, lineHeight: 19, marginLeft: 34 },
 });
 </file>
 
@@ -8115,8 +8570,10 @@ module.exports = defineConfig([
     "axios": "^1.18.1",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.34",
+    "expo-auth-session": "~7.0.11",
     "expo-blur": "~15.0.8",
     "expo-constants": "~18.0.13",
+    "expo-crypto": "~15.0.9",
     "expo-font": "~14.0.12",
     "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",

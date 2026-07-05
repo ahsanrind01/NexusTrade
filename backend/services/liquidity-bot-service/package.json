@@ -1,5 +1,5 @@
 {
-  "name": "Liquidity-bot-service",
+  "name": "liquidity-bot-service",
   "version": "1.0.0",
   "description": "Liquidity bot that maintains realistic buy/sell orders around market price via the Order Service API",
   "main": "index.js",

@@ -175,11 +175,12 @@ const PairPill = memo(PairPillBase, (prev, next) =>
 );
 
 function MiniOrderBook({
-  book, loading, currentPrice,
+  book, loading, currentPrice, onSelectPrice,
 }: {
   book: OrderBook | undefined;
   loading: boolean;
   currentPrice: number;
+  onSelectPrice?: (price: number) => void;
 }) {
   const bids = book?.bids ?? [];
   const asks = book?.asks ?? [];
@@ -223,11 +224,16 @@ function MiniOrderBook({
         <Text style={[styles.obLabel, { textAlign: 'right' }]}>Amount</Text>
       </View>
       {displayAsks.map((a, i) => (
-        <View key={`ask-${a.price}-${i}`} style={styles.obRow}>
+        <TouchableOpacity
+          key={`ask-${a.price}-${i}`}
+          style={styles.obRow}
+          activeOpacity={onSelectPrice ? 0.6 : 1}
+          onPress={() => onSelectPrice?.(a.price)}
+        >
           <View style={[styles.obFill, { width: `${(a.amount / maxAmount) * 100}%`, backgroundColor: T.loss + '1A' }]} />
           <Text style={[styles.obPrice, { color: T.loss }]}>{fmt(a.price)}</Text>
           <Text style={styles.obAmount}>{a.amount.toFixed(4)}</Text>
-        </View>
+        </TouchableOpacity>
       ))}
       <View style={styles.obSpread}>
         <Text style={styles.obSpreadLabel}>Spread</Text>
@@ -236,11 +242,16 @@ function MiniOrderBook({
         </Text>
       </View>
       {bids.map((b, i) => (
-        <View key={`bid-${b.price}-${i}`} style={styles.obRow}>
+        <TouchableOpacity
+          key={`bid-${b.price}-${i}`}
+          style={styles.obRow}
+          activeOpacity={onSelectPrice ? 0.6 : 1}
+          onPress={() => onSelectPrice?.(b.price)}
+        >
           <View style={[styles.obFill, { width: `${(b.amount / maxAmount) * 100}%`, backgroundColor: T.gain + '1A' }]} />
           <Text style={[styles.obPrice, { color: T.gain }]}>{fmt(b.price)}</Text>
           <Text style={styles.obAmount}>{b.amount.toFixed(4)}</Text>
-        </View>
+        </TouchableOpacity>
       ))}
     </View>
   );
@@ -462,6 +473,27 @@ export default function Trade() {
   const usdtBalance = walletBalances['USDT'] ?? 0;
   const baseBalance = walletBalances[selectedPair.base] ?? 0;
 
+  // How much of the relevant asset this order actually needs, and whether
+  // the wallet can cover it — this is the check a real exchange runs before
+  // ever letting you submit, not just a display-only balance strip.
+  const requiredAmount = useMemo(() => {
+    const amt = parseFloat(amountInput) || 0;
+    if (side === 'SELL') return amt;
+    const p = orderKind === 'MARKET' ? marketRefPrice : (parseFloat(priceInput) || 0);
+    return amt * p;
+  }, [side, amountInput, orderKind, marketRefPrice, priceInput]);
+
+  const availableBalance = side === 'BUY' ? usdtBalance : baseBalance;
+  const availableAssetLabel = side === 'BUY' ? 'USDT' : selectedPair.base;
+  const hasEnteredAmount = (parseFloat(amountInput) || 0) > 0;
+  const insufficientBalance = hasEnteredAmount && requiredAmount > availableBalance;
+
+  const handleSelectBookPrice = useCallback((price: number) => {
+    if (orderKind !== 'LIMIT') setOrderKind('LIMIT');
+    setPriceInput(price >= 1000 ? price.toFixed(2) : price.toFixed(4));
+    hasAutoFilledRef.current = true;
+  }, [orderKind]);
+
   const quickAmountPcts = useMemo(() => [0.25, 0.5, 0.75, 1.0], []);
 
   const handleQuickPct = useCallback((pct: number) => {
@@ -499,6 +531,16 @@ export default function Trade() {
       executionPrice = price;
     }
 
+    const requiredForSubmit = side === 'SELL' ? amount : amount * executionPrice;
+    const availableForSubmit = side === 'BUY' ? usdtBalance : baseBalance;
+    if (requiredForSubmit > availableForSubmit) {
+      Alert.alert(
+        'Insufficient Balance',
+        `You need ${requiredForSubmit.toFixed(side === 'BUY' ? 2 : 6)} ${side === 'BUY' ? 'USDT' : selectedPair.base} but only have ${availableForSubmit.toFixed(side === 'BUY' ? 2 : 6)} available.`
+      );
+      return;
+    }
+
     try {
       await placeOrder.mutateAsync({
         asset: selectedPair.symbol,
@@ -513,7 +555,7 @@ export default function Trade() {
     } catch (err: any) {
       Alert.alert('Order Failed', err.response?.data?.error ?? 'Could not reach the order service.');
     }
-  }, [orderKind, amountInput, priceInput, marketRefPrice, selectedPair.symbol, side, placeOrder]);
+  }, [orderKind, amountInput, priceInput, marketRefPrice, selectedPair.symbol, selectedPair.base, side, placeOrder, usdtBalance, baseBalance]);
 
   const handlePairSelect = useCallback((pair: typeof PAIRS[0]) => {
     setSelectedPair(pair);
@@ -794,8 +836,13 @@ export default function Trade() {
                   </View>
 
                                     <View style={styles.inputGroup}>
-                    <Text style={styles.inputLabel}>Amount ({selectedPair.base})</Text>
-                    <View style={styles.inputRow}>
+                    <View style={styles.inputLabelRow}>
+                      <Text style={styles.inputLabel}>Amount ({selectedPair.base})</Text>
+                      <Text style={styles.availableText}>
+                        Avbl {availableBalance.toLocaleString('en-US', { maximumFractionDigits: side === 'BUY' ? 2 : 6 })} {availableAssetLabel}
+                      </Text>
+                    </View>
+                    <View style={[styles.inputRow, insufficientBalance && styles.inputRowError]}>
                       <TextInput
                         style={styles.input}
                         value={amountInput}
@@ -806,12 +853,17 @@ export default function Trade() {
                       />
                       <Text style={styles.inputUnit}>{selectedPair.base}</Text>
                     </View>
+                    {insufficientBalance && (
+                      <Text style={styles.insufficientText}>
+                        Insufficient {availableAssetLabel} balance
+                      </Text>
+                    )}
                   </View>
 
                                     <View style={styles.pctRow}>
                     {quickAmountPcts.map((pct) => (
                       <TouchableOpacity key={pct} style={styles.pctBtn} onPress={() => handleQuickPct(pct)}>
-                        <Text style={styles.pctBtnText}>{Math.round(pct * 100)}%</Text>
+                        <Text style={styles.pctBtnText}>{pct === 1 ? 'MAX' : `${Math.round(pct * 100)}%`}</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -831,8 +883,11 @@ export default function Trade() {
                       onPressIn={() => { btnScale.value = withSpring(0.97, { damping: 14 }); }}
                       onPressOut={() => { btnScale.value = withSpring(1, { damping: 10 }); }}
                       onPress={handlePlaceOrder}
-                      disabled={submitting || (orderKind === 'MARKET' && !marketRefPrice)}
-                      style={[styles.submitBtnWrap, (orderKind === 'MARKET' && !marketRefPrice) && { opacity: 0.5 }]}
+                      disabled={submitting || insufficientBalance || (orderKind === 'MARKET' && !marketRefPrice)}
+                      style={[
+                        styles.submitBtnWrap,
+                        ((orderKind === 'MARKET' && !marketRefPrice) || insufficientBalance) && { opacity: 0.5 },
+                      ]}
                     >
                       <LinearGradient
                         colors={side === 'BUY'
@@ -845,12 +900,12 @@ export default function Trade() {
                         {submitting ? (
                           <ActivityIndicator color="#fff" size="small" />
                         ) : submitSuccess ? (
-                          <Text style={styles.submitBtnText}>✓ Order Placed</Text>
+                          <Text style={styles.submitBtnText}>Order Placed</Text>
+                        ) : insufficientBalance ? (
+                          <Text style={styles.submitBtnText}>Insufficient Balance</Text>
                         ) : (
                           <Text style={styles.submitBtnText}>
-                            {side === 'BUY'
-                              ? `▲ Place Buy ${orderKind === 'MARKET' ? 'Market' : 'Limit'} Order`
-                              : `▼ Place Sell ${orderKind === 'MARKET' ? 'Market' : 'Limit'} Order`}
+                            {side === 'BUY' ? `Buy ${selectedPair.base}` : `Sell ${selectedPair.base}`}
                           </Text>
                         )}
                       </LinearGradient>
@@ -878,8 +933,9 @@ export default function Trade() {
                     <View style={styles.sectionAccentBar} />
                     <Text style={styles.obTitle}>Order Book</Text>
                     <Text style={styles.obSubtitle}>{selectedPair.base}/USDT</Text>
+                    <Text style={styles.obHint}>Tap a price to fill</Text>
                   </View>
-                  <MiniOrderBook book={orderBook} loading={loadingBook} currentPrice={selectedLivePrice} />
+                  <MiniOrderBook book={orderBook} loading={loadingBook} currentPrice={selectedLivePrice} onSelectPrice={handleSelectBookPrice} />
                 </GlassPanel>
               </Animated.View>
             </View>
@@ -995,6 +1051,10 @@ const styles = StyleSheet.create({
 
   inputGroup: { marginBottom: 14 },
   inputLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7, marginBottom: 7 },
+  inputLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 },
+  availableText: { fontSize: 9, fontFamily: FontFamily.bodyMedium, color: T.textSec },
+  insufficientText: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.loss, marginTop: 6 },
+  inputRowError: { borderColor: T.loss + '60' },
   inputRow: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.03)',
@@ -1043,6 +1103,7 @@ const styles = StyleSheet.create({
   sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
   obTitle: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
   obSubtitle: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, marginLeft: 2 },
+  obHint: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, marginLeft: 'auto' },
   orderBook: { gap: 2 },
   obHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   obLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.5 },
