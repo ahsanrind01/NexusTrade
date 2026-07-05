@@ -31,7 +31,7 @@ const seedBot = async (bot: { id: string; email: string; password: string }) => 
 
   const data = (await response.json()) as SignupResponse;
 
-  if (response.ok) {
+  if (response.ok && data.success) {
     console.log(`[seed:bots] created ${bot.id} (${bot.email}) -> ${data.user.id}`);
     return;
   }

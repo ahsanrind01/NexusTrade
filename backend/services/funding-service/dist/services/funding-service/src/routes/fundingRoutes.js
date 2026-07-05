@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const fundingController_1 = require("../controllers/fundingController");
+const trustgateway_1 = require("../middleware/trustgateway");
+const router = (0, express_1.Router)();
+router.post('/deposit/intent', trustgateway_1.trustGateway, fundingController_1.createDepositIntent);
+router.post('/deposit/simulate-crypto', trustgateway_1.trustGateway, fundingController_1.simulateCryptoDeposit);
+router.post('/withdraw/intent', trustgateway_1.trustGateway, fundingController_1.createWithdrawalIntent);
+router.get('/transactions', trustgateway_1.trustGateway, fundingController_1.getMyTransactions);
+exports.default = router;
