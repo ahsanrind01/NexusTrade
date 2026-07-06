@@ -99,18 +99,34 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.bg0 },
   scroll: { paddingHorizontal: 18 },
   ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.15 },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  screenTitle: { fontSize: 24, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.4 },
-  screenSubtitle: { fontSize: 11.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 4 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.035)' },
-  statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 26 },
+  screenTitle: { fontSize: 25, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.6 },
+  screenSubtitle: { fontSize: 11.5, fontFamily: FontFamily.body, color: T.textTer, marginTop: 4, letterSpacing: 0.2 },
+  // Same live/offline treatment as Home's status pill, plus a fixed height
+  // so it lines up cleanly with the search bar and tab pills below it.
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 13, paddingVertical: 9, borderRadius: 20,
+    borderWidth: 1, height: 40,
+  },
+  statusPillLive: {
+    backgroundColor: 'rgba(61,220,151,0.10)',
+    borderColor: 'rgba(61,220,151,0.34)',
+    shadowColor: T.gain, shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
+  statusPillOffline: {
+    backgroundColor: 'rgba(255,107,122,0.08)',
+    borderColor: 'rgba(255,107,122,0.3)',
+  },
+  statusText: { fontSize: 9.5, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
   searchRow: { marginBottom: 16, borderRadius: 17, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
+  searchRowFocusedGlow: { shadowColor: T.accent, shadowOpacity: 0.3, shadowRadius: 16 },
   searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, paddingHorizontal: 15, paddingVertical: 14, borderWidth: 1, borderColor: T.glassBorder },
   searchWrapFocused: { borderColor: 'rgba(124,138,255,0.55)' },
   searchIcon: { fontSize: 17, color: T.textTer },
   searchInput: { flex: 1, fontSize: 14, fontFamily: FontFamily.body, color: T.textPri },
   searchClear: { fontSize: 11, color: T.textTer, padding: 4 },
-  tabsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 18 },
+  tabsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 20 },
   tabsGroup: { flexDirection: 'row', gap: 4, backgroundColor: T.glass, borderRadius: 15, padding: 4, borderWidth: 1, borderColor: T.hairline },
   tab: { paddingHorizontal: 17, paddingVertical: 9, borderRadius: 11, overflow: 'hidden' },
   tabActive: { shadowColor: T.accentDeep, shadowOpacity: 0.45, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
@@ -118,7 +134,7 @@ const styles = StyleSheet.create({
   tabTextActive: { color: '#fff' },
   countPill: { marginLeft: 'auto', backgroundColor: 'rgba(124,138,255,0.12)', borderRadius: 9, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(124,138,255,0.22)' },
   countText: { fontSize: 11, fontFamily: FontFamily.heading, color: T.accent },
-  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 11 },
+  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   sectionAccentBar: { width: 3, height: 14, borderRadius: 2, backgroundColor: T.accent },
   sectionLabelText: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2 },
   sectionCountPill: { backgroundColor: 'rgba(124,138,255,0.14)', borderRadius: 7, paddingHorizontal: 7, paddingVertical: 2.5 },
@@ -380,7 +396,10 @@ const TopBar = memo(function TopBar({ connected }: { connected: boolean }) {
         <Text style={styles.screenTitle}>Markets</Text>
         <Text style={styles.screenSubtitle}>{ALL_SYMBOLS.length} assets · real-time</Text>
       </View>
-      <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.32)' : 'rgba(255,107,122,0.32)' }]}>
+      <View style={[
+        styles.statusPill,
+        connected ? styles.statusPillLive : styles.statusPillOffline,
+      ]}>
         <PulseDot color={connected ? T.gain : T.loss} />
         <Text style={[styles.statusText, { color: connected ? T.gain : T.loss }]}>
           {connected ? 'LIVE' : 'OFFLINE'}
@@ -397,7 +416,10 @@ const SearchBar = memo(function SearchBar({
   onChangeText: (t: string) => void; onFocus: () => void; onBlur: () => void; onClear: () => void;
 }) {
   return (
-    <Animated.View entering={FadeInDown.delay(80).springify().damping(16)} style={styles.searchRow}>
+    <Animated.View
+      entering={FadeInDown.delay(80).springify().damping(16)}
+      style={[styles.searchRow, focused && styles.searchRowFocusedGlow]}
+    >
       <GlassPanel style={[styles.searchWrap, focused && styles.searchWrapFocused]} intensity={22}>
         <Text style={styles.searchIcon}>⌕</Text>
         <TextInput

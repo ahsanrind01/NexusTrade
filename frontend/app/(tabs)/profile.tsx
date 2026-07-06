@@ -7,7 +7,7 @@ import {
 import Animated, {
   FadeIn, FadeInDown, FadeInUp, FadeOut,
   useSharedValue, useAnimatedStyle,
-  withSpring, withTiming, Easing,
+  withSpring, withTiming, withRepeat, withSequence, Easing,
   interpolate,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -57,10 +57,26 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
+const PulseDot = memo(function PulseDot({ color }: { color: string }) {
+  const scale = useSharedValue(1);
+  const opacity = useSharedValue(0.9);
+  useEffect(() => {
+    scale.value = withRepeat(withSequence(withTiming(2.2, { duration: 1100 }), withTiming(1, { duration: 0 })), -1, false);
+    opacity.value = withRepeat(withSequence(withTiming(0, { duration: 1100 }), withTiming(0.9, { duration: 0 })), -1, false);
+  }, []);
+  const ringStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }], opacity: opacity.value }));
+  return (
+    <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
+      <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ringStyle]} />
+      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color, shadowColor: color, shadowOpacity: 0.9, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }} />
+    </View>
+  );
+});
+
 function AmbientField() {
   const drift = useSharedValue(0);
   useEffect(() => {
-    drift.value = withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) });
+    drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
   }, []);
   const orb1 = useAnimatedStyle(() => ({
     transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 16]) }, { translateY: interpolate(drift.value, [0, 1], [-10, 12]) }],
@@ -68,10 +84,14 @@ function AmbientField() {
   const orb2 = useAnimatedStyle(() => ({
     transform: [{ translateX: interpolate(drift.value, [0, 1], [12, -18]) }, { translateY: interpolate(drift.value, [0, 1], [8, -14]) }],
   }));
+  const orb3 = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(drift.value, [0, 1], [-8, 10]) }, { translateY: interpolate(drift.value, [0, 1], [10, -8]) }],
+  }));
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <Animated.View style={[styles.ambientOrb, { top: -90, left: -70, backgroundColor: T.accentDeep }, orb1]} />
       <Animated.View style={[styles.ambientOrb, { top: 220, right: -110, backgroundColor: T.violet, opacity: 0.09 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: 520, left: -90, width: 220, height: 220, borderRadius: 110, backgroundColor: T.gold, opacity: 0.05 }, orb3]} />
     </View>
   );
 }
@@ -114,6 +134,9 @@ const Avatar = memo(function Avatar({ name, onPress }: { name: string; onPress: 
         <View style={styles.avatarInner}>
           <Text style={styles.avatarInitials}>{getInitials(name || 'Trader')}</Text>
         </View>
+        <View style={styles.avatarStatusDot}>
+          <PulseDot color={T.gain} />
+        </View>
       </View>
     </Pressy>
   );
@@ -135,7 +158,9 @@ function InfoRow({ icon, label, value, valueColor, isLast }: { icon: keyof typeo
   return (
     <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
       <View style={styles.infoLeft}>
-        <Ionicons name={icon} size={15} color={T.textTer} />
+        <View style={styles.infoIconShell}>
+          <Ionicons name={icon} size={14} color={T.accent} />
+        </View>
         <Text style={styles.infoLabel}>{label}</Text>
       </View>
       <Text style={[styles.infoValue, valueColor ? { color: valueColor } : {}]} numberOfLines={1}>{value}</Text>
@@ -358,6 +383,7 @@ export default function Profile() {
               start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 0.8 }}
               style={StyleSheet.absoluteFill}
             />
+            <View style={styles.heroInnerBorder} pointerEvents="none" />
 
             <View style={styles.heroCenter}>
               <Avatar name={profile.name} onPress={() => setSettingsVisible(true)} />
@@ -382,7 +408,10 @@ export default function Profile() {
               </View>
               <View style={[styles.statCell, styles.statCellDivider]}>
                 <Text style={styles.statCellLabel}>STATUS</Text>
-                <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing' : 'Active'}</Text>
+                <View style={styles.statusValueRow}>
+                  {!profileLoading && <PulseDot color={T.gain} />}
+                  <Text style={[styles.statCellValue, { color: T.gain }]}>{profileLoading ? 'Syncing' : 'Active'}</Text>
+                </View>
               </View>
             </View>
           </GlassPanel>
@@ -391,6 +420,7 @@ export default function Profile() {
         <Animated.View entering={FadeInDown.delay(140).springify().damping(16)}>
           <SectionLabel text="Personal Information" />
           <GlassPanel style={styles.infoPanel} intensity={24}>
+            <View style={styles.panelInnerBorder} pointerEvents="none" />
             <InfoRow icon="person-outline" label="Full Name" value={profile.name} />
             <InfoRow icon="mail-outline" label="Email Address" value={profile.email} isLast />
           </GlassPanel>
@@ -399,6 +429,7 @@ export default function Profile() {
         <Animated.View entering={FadeInDown.delay(190).springify().damping(16)}>
           <SectionLabel text="Security" />
           <GlassPanel style={styles.infoPanel} intensity={24}>
+            <View style={styles.panelInnerBorder} pointerEvents="none" />
             <InfoRow
               icon="lock-closed-outline"
               label="Password"
@@ -411,6 +442,7 @@ export default function Profile() {
         <Animated.View entering={FadeInDown.delay(220).springify().damping(16)}>
           <SectionLabel text="Legal" />
           <GlassPanel style={styles.infoPanel} intensity={24}>
+            <View style={styles.panelInnerBorder} pointerEvents="none" />
             <SettingsMenuRow icon="document-text-outline" label="Terms & Conditions" onPress={goToTerms} />
             <View style={styles.menuRowDivider} />
             <SettingsMenuRow icon="shield-outline" label="Privacy Policy" onPress={goToPrivacy} />
@@ -420,7 +452,10 @@ export default function Profile() {
         <Animated.View entering={FadeInDown.delay(250).springify().damping(16)} style={{ marginTop: 6 }}>
           <Pressy onPress={handleLogout}>
             <GlassPanel style={styles.logoutPanel} intensity={20}>
-              <Ionicons name="log-out-outline" size={17} color={T.loss} />
+              <View style={styles.logoutInnerBorder} pointerEvents="none" />
+              <View style={styles.logoutIconShell}>
+                <Ionicons name="log-out-outline" size={16} color={T.loss} />
+              </View>
               <Text style={styles.logoutText}>Log Out</Text>
             </GlassPanel>
           </Pressy>
@@ -469,6 +504,7 @@ const styles = StyleSheet.create({
 
   heroWrap: { marginBottom: 18, borderRadius: 26, shadowColor: T.accentDeep, shadowOpacity: 0.26, shadowRadius: 28, shadowOffset: { width: 0, height: 12 }, elevation: 10 },
   heroPanel: { borderRadius: 26, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
+  heroInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 25, borderTopRightRadius: 25 },
   heroCenter: { alignItems: 'center' },
 
   avatarWrap: { marginBottom: 14 },
@@ -477,6 +513,13 @@ const styles = StyleSheet.create({
   avatarRingGradient: { flex: 1, borderRadius: 44 },
   avatarInner: { width: 78, height: 78, borderRadius: 39, backgroundColor: '#14151C', justifyContent: 'center', alignItems: 'center' },
   avatarInitials: { fontSize: 25, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.5 },
+  avatarStatusDot: {
+    position: 'absolute', bottom: 2, right: 2,
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: '#14151C',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#14151C',
+  },
 
   heroName: { fontSize: 21, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.3, marginBottom: 3 },
   heroEmail: { fontSize: 13, fontFamily: FontFamily.body, color: T.textSec, marginBottom: 15 },
@@ -491,21 +534,26 @@ const styles = StyleSheet.create({
   statCellDivider: { borderLeftWidth: 1, borderLeftColor: T.hairline, paddingLeft: 12 },
   statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6, marginBottom: 4 },
   statCellValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
+  statusValueRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
 
   sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: 4 },
   sectionAccentBar: { width: 3, height: 13, borderRadius: 2, backgroundColor: T.accent },
   sectionLabelText: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2, flex: 1 },
 
   infoPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, paddingHorizontal: 16, marginBottom: 18, shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  panelInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.10)', borderTopLeftRadius: 19, borderTopRightRadius: 19 },
   infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 15 },
   infoRowBorder: { borderBottomWidth: 1, borderBottomColor: T.hairline },
   infoLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  infoIconShell: { width: 28, height: 28, borderRadius: 9, backgroundColor: 'rgba(124,138,255,0.12)', justifyContent: 'center', alignItems: 'center' },
   infoLabel: { fontSize: 13, fontFamily: FontFamily.bodyMedium, color: T.textSec },
   infoValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri, maxWidth: '48%', textAlign: 'right' },
 
   menuRowDivider: { height: 1, backgroundColor: T.hairline },
 
-  logoutPanel: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.2)', paddingVertical: 16 },
+  logoutPanel: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,107,122,0.2)', paddingVertical: 14 },
+  logoutInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,107,122,0.14)', borderTopLeftRadius: 17, borderTopRightRadius: 17 },
+  logoutIconShell: { width: 30, height: 30, borderRadius: 10, backgroundColor: T.lossDim, justifyContent: 'center', alignItems: 'center' },
   logoutText: { fontSize: 14, fontFamily: FontFamily.heading, color: T.loss },
 
   sheet: { backgroundColor: '#0B0C11', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 12, borderWidth: 1, borderColor: T.glassBorderHi, borderBottomWidth: 0 },

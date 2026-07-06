@@ -102,7 +102,7 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
       <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ring]} />
-      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }} />
+      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color, shadowColor: color, shadowOpacity: 0.9, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }} />
     </View>
   );
 });
@@ -367,10 +367,17 @@ const AmbientField = memo(function AmbientField() {
       { translateY: interpolate(drift.value, [0, 1], [10, -8]) },
     ],
   }));
+  const orb3 = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: interpolate(drift.value, [0, 1], [-8, 10]) },
+      { translateY: interpolate(drift.value, [0, 1], [10, -8]) },
+    ],
+  }));
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <Animated.View style={[styles.ambientOrb, { top: -60, right: -80, backgroundColor: T.gain, opacity: 0.07 }, orb1]} />
       <Animated.View style={[styles.ambientOrb, { bottom: 200, left: -100, backgroundColor: T.accentDeep, opacity: 0.10 }, orb2]} />
+      <Animated.View style={[styles.ambientOrb, { top: 460, right: -110, width: 220, height: 220, borderRadius: 110, backgroundColor: T.gold, opacity: 0.045 }, orb3]} />
     </View>
   );
 });
@@ -666,14 +673,17 @@ export default function Trade() {
           >
                         <Animated.View entering={FadeIn.delay(40).duration(400)} style={styles.topBar}>
               <View>
-                <Text style={styles.screenLabel}>Trading Terminal</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                <View style={styles.liveTag}>
+                  <PulseDot color={T.accent} />
+                  <Text style={styles.liveTagText}>TRADING TERMINAL</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
                   <Text style={styles.screenTitle}>{selectedPair.base} / {selectedPair.quote}</Text>
                   <LivePriceTicker symbol={selectedPair.symbol} color={selectedPair.color} />
                 </View>
               </View>
               <View style={styles.topRight}>
-                <View style={[styles.statusPill, { borderColor: connected ? 'rgba(61,220,151,0.3)' : 'rgba(255,107,122,0.3)' }]}>
+                <View style={[styles.statusPill, connected ? styles.statusPillLive : styles.statusPillOffline]}>
                   <PulseDot color={connected ? T.gain : T.loss} />
                   <Text style={[styles.statusText, { color: connected ? T.gain : T.loss }]}>
                     {connected ? 'LIVE' : 'OFFLINE'}
@@ -702,26 +712,27 @@ export default function Trade() {
                         <Animated.View entering={FadeInDown.delay(90).springify().damping(16)} style={styles.walletStrip}>
               <GlassPanel style={styles.walletPanel}>
                 <LinearGradient
-                  colors={['rgba(255,255,255,0.04)', 'transparent']}
-                  start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+                  colors={['rgba(255,255,255,0.10)', 'rgba(255,255,255,0)']}
+                  start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.45 }}
                   style={StyleSheet.absoluteFill}
                 />
+                <View style={styles.panelInnerBorder} pointerEvents="none" />
                 <View style={styles.walletRow}>
                   <View style={styles.walletItem}>
-                    <Text style={styles.walletLabel}>USDT Balance</Text>
-                    <Text style={[styles.walletValue, { color: T.gain }]}>
+                    <Text style={styles.walletLabel}>USDT BALANCE</Text>
+                    <Text style={[styles.walletValue, { color: T.gain }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                       ${usdtBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </Text>
                   </View>
                   <View style={styles.walletDivider} />
                   <View style={styles.walletItem}>
-                    <Text style={styles.walletLabel}>{selectedPair.base} Balance</Text>
-                    <Text style={[styles.walletValue, { color: selectedPair.color }]}>
+                    <Text style={styles.walletLabel}>{selectedPair.base} BALANCE</Text>
+                    <Text style={[styles.walletValue, { color: selectedPair.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                       {baseBalance.toFixed(6)} {selectedPair.base}
                     </Text>
                   </View>
                   <View style={styles.walletDivider} />
-                  <TouchableOpacity onPress={fetchWallet} style={styles.walletRefresh}>
+                  <TouchableOpacity onPress={fetchWallet} style={styles.walletRefresh} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                     <Text style={styles.walletRefreshIcon}>↻</Text>
                   </TouchableOpacity>
                 </View>
@@ -730,6 +741,7 @@ export default function Trade() {
 
                         <Animated.View entering={FadeInDown.delay(110).springify().damping(16)} style={styles.tabBarWrap}>
               <GlassPanel style={styles.tabBar}>
+                <View style={styles.panelInnerBorder} pointerEvents="none" />
                 <View style={styles.tabsGroup}>
                   {(['trade', 'orders', 'trades'] as const).map((t) => (
                     <TouchableOpacity
@@ -982,15 +994,30 @@ const styles = StyleSheet.create({
   ambientOrb: { position: 'absolute', width: 300, height: 300, borderRadius: 150 },
   hidden: { display: 'none' },
 
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
-  screenLabel: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.8, marginBottom: 2 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
+  liveTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(124,138,255,0.14)', borderRadius: 8,
+    paddingHorizontal: 9, paddingVertical: 5, alignSelf: 'flex-start',
+    borderWidth: 1, borderColor: 'rgba(124,138,255,0.24)',
+  },
+  liveTagText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 1.3 },
   screenTitle: { fontSize: 22, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.4 },
   tickerPrice: { fontSize: 18, fontFamily: FontFamily.heading, letterSpacing: -0.4 },
   topRight: { paddingTop: 4 },
   statusPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 11, paddingVertical: 6, borderRadius: 20,
-    borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1,
+  },
+  statusPillLive: {
+    backgroundColor: 'rgba(61,220,151,0.10)',
+    borderColor: 'rgba(61,220,151,0.3)',
+    shadowColor: T.gain, shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
+  statusPillOffline: {
+    backgroundColor: 'rgba(255,107,122,0.08)',
+    borderColor: 'rgba(255,107,122,0.3)',
   },
   statusText: { fontSize: 9, fontFamily: FontFamily.heading, letterSpacing: 1.2 },
 
@@ -1001,23 +1028,27 @@ const styles = StyleSheet.create({
     borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder,
     backgroundColor: T.glass, overflow: 'hidden',
   },
-  pairPillActive: { borderColor: T.glassBorderHi },
+  pairPillActive: {
+    borderColor: T.glassBorderHi,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+  },
   pairDot: { width: 6, height: 6, borderRadius: 3 },
   pairPillText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.textTer },
   pairPillPrice: { fontSize: 11, fontFamily: FontFamily.body, marginLeft: 2 },
 
-  walletStrip: { marginBottom: 12, borderRadius: 18, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 } },
-  walletPanel: { borderRadius: 18, borderWidth: 1, borderColor: T.glassBorder, overflow: 'hidden' },
-  walletRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16 },
+  walletStrip: { marginBottom: 14, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  walletPanel: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, overflow: 'hidden' },
+  walletRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, paddingHorizontal: 16 },
   walletItem: { flex: 1 },
-  walletLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.5, marginBottom: 4 },
+  walletLabel: { fontSize: 8.5, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.8, marginBottom: 5 },
   walletValue: { fontSize: 14, fontFamily: FontFamily.heading },
   walletDivider: { width: 1, height: 30, backgroundColor: T.hairline, marginHorizontal: 12 },
   walletRefresh: { paddingHorizontal: 8, paddingVertical: 4 },
   walletRefreshIcon: { fontSize: 18, color: T.textTer },
 
-  tabBarWrap: { marginBottom: 14, borderRadius: 18, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 } },
-  tabBar: { borderRadius: 18, borderWidth: 1, borderColor: T.glassBorder, padding: 4 },
+  tabBarWrap: { marginBottom: 14, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  tabBar: { borderRadius: 20, borderWidth: 1, borderColor: T.glassBorder, padding: 4 },
+  panelInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.12)', borderTopLeftRadius: 19, borderTopRightRadius: 19 },
   tabsGroup: { flexDirection: 'row', gap: 4 },
   tabBtn: { flex: 1, paddingVertical: 10, borderRadius: 14, alignItems: 'center', overflow: 'hidden' },
   tabBtnActive: {},

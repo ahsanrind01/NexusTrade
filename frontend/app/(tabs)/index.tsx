@@ -110,8 +110,6 @@ const PriceFlash = memo(function PriceFlash({ price, positive }: { price: string
   );
 }, (p, n) => p.price === n.price && p.positive === n.positive);
 
-// width/height are now props (defaulted to the original asset-row size) so
-// the same component can be reused, larger, for the real portfolio chart.
 const Sparkline = memo(function Sparkline({
   points, positive, width: w = 58, height: h = 34,
 }: { points: number[]; positive: boolean; width?: number; height?: number }) {
@@ -173,12 +171,6 @@ function AmbientField() {
   );
 }
 
-// Builds a cumulative net-deposit series from real funding transactions
-// (completed deposits add, completed withdrawals subtract), sorted oldest
-// to newest. This replaces the old Math.random() bar chart — it's real
-// account activity, not a mock, though it's a proxy for portfolio value
-// (deposits net of withdrawals) rather than a live mark-to-market curve,
-// since the backend doesn't yet persist historical portfolio valuations.
 function usePortfolioSeries(transactions: FundingTransaction[]) {
   return useMemo(() => {
     const completed = transactions
@@ -195,7 +187,6 @@ function usePortfolioSeries(transactions: FundingTransaction[]) {
       return running;
     });
 
-    // Cap to the most recent 12 points so the chart stays readable.
     const trimmed = points.length > 12 ? points.slice(-12) : points;
     return { points: trimmed, hasData: trimmed.length >= 2 };
   }, [transactions]);
@@ -239,15 +230,12 @@ const PortfolioCard = memo(function PortfolioCard({
         <View style={styles.heroTop}>
           <View style={{ flex: 1 }}>
             <View style={styles.liveTag}>
-              <PulseDot color={T.gain} />
+              <PulseDot color={T.accent} />
               <Text style={styles.liveTagText}>PORTFOLIO</Text>
             </View>
             {isLoading && totalUsd === 0 ? (
               <View style={styles.skeletonValue} />
             ) : (
-              // adjustsFontSizeToFit + numberOfLines=1: large balances used to
-              // wrap onto a second line here. Now the value shrinks to fit
-              // one line instead, down to 60% of the base font size.
               <Text
                 style={styles.heroValue}
                 numberOfLines={1}
@@ -279,19 +267,20 @@ const PortfolioCard = memo(function PortfolioCard({
           </View>
         </View>
 
-        {/* Real chart: cumulative net deposits, built from GET /funding/transactions. */}
-        <View style={styles.chartRow}>
-          {hasSeriesData ? (
-            <Sparkline points={series} positive={seriesPositive} width={width - 76} height={54} />
-          ) : (
-            <View style={styles.chartEmpty}>
-              <Text style={styles.chartEmptyText}>No deposit activity yet — fund your account to see it here</Text>
-            </View>
+        <View style={styles.chartCard}>
+          <View style={styles.chartRow}>
+            {hasSeriesData ? (
+              <Sparkline points={series} positive={seriesPositive} width={width - 108} height={48} />
+            ) : (
+              <View style={styles.chartEmpty}>
+                <Text style={styles.chartEmptyText}>No deposit activity yet — fund your account to see it here</Text>
+              </View>
+            )}
+          </View>
+          {hasSeriesData && (
+            <Text style={styles.chartCaption}>Net deposits over your recent activity</Text>
           )}
         </View>
-        <Text style={styles.chartCaption}>
-          {hasSeriesData ? 'Net deposits over your recent activity' : ' '}
-        </Text>
 
         <View style={styles.heroDivider} />
 
@@ -330,6 +319,11 @@ const ActionButton = memo(function ActionButton({
         style={{ alignItems: 'center' }}
       >
         <View style={styles.actionIconShell}>
+          <LinearGradient
+            colors={[color + '26', color + '06']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
           <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 17, backgroundColor: color, opacity: 0.28 }, glowStyle]} />
           <Text style={[styles.actionIcon, { color }]}>{icon}</Text>
         </View>
@@ -341,12 +335,6 @@ const ActionButton = memo(function ActionButton({
 
 const QuickActions = memo(function QuickActions() {
   const router = useRouter();
-
-  // Add Funds / Withdraw deep-link into the Wallet screen's existing
-  // deposit/withdraw modal (see app/(tabs)/wallet.tsx's `action` param
-  // handling). Trade goes straight to the trading terminal. Transfer has
-  // no backend endpoint yet (funding-service only supports deposit/
-  // withdraw), so it's flagged honestly instead of silently doing nothing.
   const handleAddFunds = useCallback(() => {
     router.push({ pathname: '/(tabs)/wallet', params: { action: 'deposit' } });
   }, [router]);
@@ -363,6 +351,7 @@ const QuickActions = memo(function QuickActions() {
   return (
     <Animated.View entering={FadeInDown.delay(150).springify().damping(16)} style={styles.actionsPanelWrap}>
       <GlassPanel style={styles.actionsPanel} intensity={24}>
+        <View style={styles.panelInnerBorder} pointerEvents="none" />
         <View style={styles.actionsRow}>
           <ActionButton label="Add Funds" icon="＋" color={T.gain} onPress={handleAddFunds} />
           <ActionButton label="Withdraw"  icon="↑"  color={T.loss} onPress={handleWithdraw} />
@@ -384,6 +373,7 @@ const AIInsightCard = memo(function AIInsightCard() {
     <Animated.View entering={FadeInDown.delay(200).springify().damping(16)} style={styles.aiWrap}>
       <GlassPanel style={styles.aiPanel} intensity={26}>
         <LinearGradient colors={['rgba(124,138,255,0.16)', 'rgba(181,131,255,0.06)', 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+        <View style={styles.panelInnerBorder} pointerEvents="none" />
         <View style={styles.aiHeader}>
           <Animated.View style={[styles.aiIconShell, shimmerStyle]}>
             <Text style={styles.aiIcon}>◈</Text>
@@ -489,9 +479,6 @@ export default function Home() {
   useMarketSocket();
   useTicker24h(TOP_5);
 
-  // Populate orderStore/fundingStore so the portfolio card can show real
-  // open-orders / deposit stats and chart, even if the user hasn't visited
-  // the Trade or Wallet tabs yet this session.
   useMyOrders();
   useFundingHistory();
   const orders = useOrderStore((s) => s.orders);
@@ -539,9 +526,6 @@ export default function Home() {
 
   const keyExtractor = useCallback((item: any) => item.symbol, []);
 
-  // Bell now opens the Wallet tab's activity/history section (real
-  // destination, real data) instead of doing nothing. The dot only lights
-  // up when there's genuine activity in the last 24h.
   const handleNotifPress = useCallback(() => {
     router.push({ pathname: '/(tabs)/wallet', params: { action: 'history' } });
   }, [router]);
@@ -632,17 +616,15 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: 18 },
   ambientOrb: { position: 'absolute', width: 280, height: 280, borderRadius: 140, opacity: 0.15 },
 
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  greeting: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.6 },
-  userName: { fontSize: 24, fontFamily: FontFamily.heading, color: T.textPri, marginTop: 4, letterSpacing: -0.4 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 26 },
+  greeting: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7 },
+  userName: { fontSize: 25, fontFamily: FontFamily.heading, color: T.textPri, marginTop: 4, letterSpacing: -0.6 },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   statusPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 13, paddingVertical: 8, borderRadius: 20,
-    borderWidth: 1,
+    paddingHorizontal: 13, paddingVertical: 9, borderRadius: 20,
+    borderWidth: 1, height: 40,
   },
-  // Distinct, slightly punchier looks for live vs offline instead of one
-  // plain grey pill with a barely-visible border in both states.
   statusPillLive: {
     backgroundColor: 'rgba(61,220,151,0.10)',
     borderColor: 'rgba(61,220,151,0.34)',
@@ -653,48 +635,74 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,107,122,0.3)',
   },
   statusText: { fontSize: 9.5, fontFamily: FontFamily.heading, letterSpacing: 1.3 },
-  notifBtn: { width: 40, height: 40, borderRadius: 14, backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
-  notifDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: T.loss, position: 'absolute', top: 8, right: 8, borderWidth: 1.5, borderColor: T.bg0, zIndex: 1 },
+  notifBtn: {
+    width: 40, height: 40, borderRadius: 14, backgroundColor: T.glass,
+    borderWidth: 1, borderColor: T.glassBorder, justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
+  },
+  notifDot: {
+    width: 7, height: 7, borderRadius: 3.5, backgroundColor: T.loss,
+    position: 'absolute', top: 7, right: 7, borderWidth: 1.5, borderColor: T.bg0, zIndex: 1,
+    shadowColor: T.loss, shadowOpacity: 0.8, shadowRadius: 4, shadowOffset: { width: 0, height: 0 },
+  },
   notifIcon: { fontSize: 16, color: T.textSec },
 
   heroWrap: { marginBottom: 18, borderRadius: 28, shadowColor: T.accentDeep, shadowOpacity: 0.32, shadowRadius: 34, shadowOffset: { width: 0, height: 14 }, elevation: 12 },
   heroPanel: { borderRadius: 28, padding: 22, borderWidth: 1, borderColor: T.glassBorderHi },
   heroInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.14)', borderTopLeftRadius: 27, borderTopRightRadius: 27 },
-  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  liveTag: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: T.gainDim, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, alignSelf: 'flex-start', marginBottom: 11, borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)' },
-  liveTagText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 1.5 },
-  // Fixed line-height/height so adjustsFontSizeToFit has one predictable
-  // box to shrink into, instead of the balance re-flowing onto a 2nd line.
-  heroValue: { fontSize: 40, lineHeight: 46, height: 46, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.4, maxWidth: width * 0.55 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 22 },
+  liveTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(124,138,255,0.14)', borderRadius: 8,
+    paddingHorizontal: 9, paddingVertical: 5, alignSelf: 'flex-start', marginBottom: 12,
+    borderWidth: 1, borderColor: 'rgba(124,138,255,0.24)',
+  },
+  liveTagText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent, letterSpacing: 1.5 },
+  heroValue: { fontSize: 42, lineHeight: 48, height: 48, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.6, maxWidth: width * 0.55 },
   heroDelta: { fontSize: 11.5, fontFamily: FontFamily.heading, color: T.gain },
   heroStatsCol: { alignItems: 'flex-end', maxWidth: width * 0.32 },
   heroStatItem: { alignItems: 'flex-end', width: '100%' },
-  heroStatLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.9, marginBottom: 4 },
-  heroStatValue: { fontSize: 16, fontFamily: FontFamily.heading },
+  heroStatLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 1, marginBottom: 4 },
+  heroStatValue: { fontSize: 16.5, fontFamily: FontFamily.heading },
 
-  // Real chart row (replaces the old random bar chart)
-  chartRow: { height: 54, marginBottom: 6, alignItems: 'center', justifyContent: 'center' },
+  // Real chart, now framed in its own soft card instead of floating
+  // directly on the hero background — reads as an intentional module
+  // rather than orphaned whitespace.
+  chartCard: {
+    backgroundColor: 'rgba(255,255,255,0.025)', borderRadius: 16,
+    borderWidth: 1, borderColor: T.hairline,
+    paddingVertical: 12, paddingHorizontal: 8, marginBottom: 18,
+  },
+  chartRow: { height: 48, alignItems: 'center', justifyContent: 'center' },
   chartEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
   chartEmptyText: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
-  chartCaption: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 18, textAlign: 'center' },
+  chartCaption: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center', marginTop: 8 },
 
   heroDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 18 },
   statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
   statCell: { alignItems: 'flex-start', flex: 1 },
   statCellDivider: { borderLeftWidth: 1, borderLeftColor: T.hairline, paddingLeft: 12 },
-  statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.7, marginBottom: 5 },
-  statCellValue: { fontSize: 13, fontFamily: FontFamily.heading, color: T.textPri },
+  statCellLabel: { fontSize: 8, fontFamily: FontFamily.body, color: T.textTer, letterSpacing: 0.8, marginBottom: 6 },
+  statCellValue: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri },
 
-  actionsPanelWrap: { marginBottom: 16, borderRadius: 24, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 0, height: 6 } },
-  actionsPanel: { borderRadius: 24, paddingVertical: 19, paddingHorizontal: 10, borderWidth: 1, borderColor: T.glassBorder },
+  actionsPanelWrap: { marginBottom: 16, borderRadius: 24, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  actionsPanel: { borderRadius: 24, paddingVertical: 20, paddingHorizontal: 10, borderWidth: 1, borderColor: T.glassBorder },
   actionsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  actionIconShell: { width: 54, height: 54, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.045)', borderWidth: 1, borderColor: T.hairline, justifyContent: 'center', alignItems: 'center', marginBottom: 9, overflow: 'hidden' },
+  actionIconShell: {
+    width: 54, height: 54, borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.045)', borderWidth: 1, borderColor: T.hairline,
+    justifyContent: 'center', alignItems: 'center', marginBottom: 10, overflow: 'hidden',
+  },
   actionIcon: { fontSize: 20, fontFamily: FontFamily.heading },
   actionLabel: { fontSize: 10, fontFamily: FontFamily.bodyMedium, color: T.textSec, letterSpacing: 0.3 },
 
-  aiWrap: { marginBottom: 16, borderRadius: 24, shadowColor: T.accent, shadowOpacity: 0.14, shadowRadius: 22, shadowOffset: { width: 0, height: 10 } },
+  aiWrap: { marginBottom: 16, borderRadius: 24, shadowColor: T.accent, shadowOpacity: 0.14, shadowRadius: 22, shadowOffset: { width: 0, height: 10 }, elevation: 6 },
   aiPanel: { borderRadius: 24, padding: 18, borderWidth: 1, borderColor: T.glassBorderHi },
-  aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 13 },
+  // Shared 1px top-highlight used by the actions & AI panels, matching the
+  // hero card's heroInnerBorder so all three glass panels feel like one
+  // cohesive material rather than three separately-styled boxes.
+  panelInnerBorder: { position: 'absolute', top: 1, left: 1, right: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.12)', borderTopLeftRadius: 23, borderTopRightRadius: 23 },
+  aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
   aiIconShell: { width: 31, height: 31, borderRadius: 10, backgroundColor: 'rgba(124,138,255,0.18)', borderWidth: 1, borderColor: 'rgba(124,138,255,0.34)', justifyContent: 'center', alignItems: 'center' },
   aiIcon: { fontSize: 14, color: T.accent },
   aiTitle: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri, flex: 1, letterSpacing: -0.15 },
@@ -706,10 +714,10 @@ const styles = StyleSheet.create({
   aiSignalLabel: { fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, marginBottom: 5 },
   aiSignalValue: { fontSize: 12.5, fontFamily: FontFamily.heading },
 
-  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 11 },
+  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   sectionAccentBar: { width: 3, height: 14, borderRadius: 2, backgroundColor: T.accent },
   sectionLabelText: { fontSize: 13.5, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: 0.2, flex: 1 },
-  seeAllBtn: {},
+  seeAllBtn: { paddingVertical: 4, paddingLeft: 8 },
   seeAllText: { fontSize: 12, fontFamily: FontFamily.bodyMedium, color: T.accent },
 
   listHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginBottom: 10 },
@@ -732,13 +740,13 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
 
   skeletonValue: {
-    width: 190, height: 46, borderRadius: 11,
+    width: 190, height: 48, borderRadius: 11,
     backgroundColor: 'rgba(255,255,255,0.07)', marginBottom: 8,
   },
   deltaChip: {
     backgroundColor: T.gainDim, borderRadius: 8,
     paddingHorizontal: 9, paddingVertical: 4,
     borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)',
-    alignSelf: 'flex-start', marginTop: 6,
+    alignSelf: 'flex-start', marginTop: 7,
   },
 });

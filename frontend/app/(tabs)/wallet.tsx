@@ -169,7 +169,7 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
       <Animated.View style={[{ width: 7, height: 7, borderRadius: 4, backgroundColor: color, position: 'absolute' }, ringStyle]} />
-      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }} />
+      <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color, shadowColor: color, shadowOpacity: 0.9, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }} />
     </View>
   );
 });
@@ -1180,7 +1180,14 @@ export default function Wallet() {
               {isLoading ? (
                 <ActivityIndicator color={T.accent} size="large" style={styles.heroLoader} />
               ) : (
-                <Text style={styles.heroValue}>${totalUsdStr}</Text>
+                <Text
+                  style={styles.heroValue}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.6}
+                >
+                  ${totalUsdStr}
+                </Text>
               )}
 
               <View style={styles.heroDeltaRow}>
@@ -1375,9 +1382,10 @@ const styles = StyleSheet.create({
   pageLabel: { fontSize: 26, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -0.5 },
   pageSubLabel: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer, marginTop: 2 },
   notifBtn: {
-    width: 38, height: 38, borderRadius: 13,
+    width: 40, height: 40, borderRadius: 14,
     backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder,
     justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
   },
   notifIcon: { fontSize: 18, color: T.textSec },
 
@@ -1396,7 +1404,7 @@ const styles = StyleSheet.create({
   },
   heroBadgeText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 1.4 },
   heroLoader: { marginVertical: 16 },
-  heroValue: { fontSize: 42, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.5, marginBottom: 10 },
+  heroValue: { fontSize: 42, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.5, marginBottom: 10, maxWidth: width * 0.62 },
   heroDeltaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   heroDeltaBadge: { backgroundColor: T.gainDim, borderRadius: 7, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)' },
   heroDeltaText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.gain },
@@ -1431,7 +1439,10 @@ const styles = StyleSheet.create({
   sectionCountPill: { backgroundColor: 'rgba(124,138,255,0.12)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   sectionCountText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.accent },
 
-  assetCardWrap: { marginBottom: 10 },
+  assetCardWrap: {
+    marginBottom: 10,
+    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
+  },
   assetCard: { borderRadius: 18, padding: 16, borderWidth: 1, borderColor: T.glassBorder, backgroundColor: T.glassUp, flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
   assetCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
   assetCardIcon: { width: 42, height: 42, borderRadius: 13, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
@@ -1448,6 +1459,7 @@ const styles = StyleSheet.create({
     backgroundColor: T.glass, borderRadius: 17,
     paddingVertical: 13, paddingHorizontal: 14,
     marginBottom: 8, borderWidth: 1, borderColor: T.glassBorder,
+    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
   },
   historyIconWrap: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   historyIcon: { fontSize: 16, fontFamily: FontFamily.heading },
