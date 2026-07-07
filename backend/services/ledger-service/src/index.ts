@@ -40,6 +40,7 @@ const run = async () => {
     'completed-trades',
     'user-created',
     'deposit-cleared',
+    'withdrawal-validated',
     'balance-updates',
   ]);
   await consumer.connect();
@@ -49,6 +50,7 @@ const run = async () => {
   await consumer.subscribe({ topic: 'completed-trades', fromBeginning: true });
   await consumer.subscribe({ topic: 'user-created', fromBeginning: true });
   await consumer.subscribe({ topic: 'deposit-cleared', fromBeginning: true });
+  await consumer.subscribe({ topic: 'withdrawal-validated', fromBeginning: true });
 
   await consumer.run({
     eachMessage: async ({ topic, partition, message }) => {
@@ -85,6 +87,42 @@ const run = async () => {
           });
         } catch (error) {
           console.error(`Ledger: Failed to record deposit:`, error);
+        }
+        return;
+      }
+
+      if (topic === 'withdrawal-validated') {
+        const { userId, asset, amount, transactionId, eventId } = data;
+        const referenceId = eventId || transactionId;
+        if (!userId || !asset || !amount || !referenceId) {
+          console.warn('Ledger: Skipping withdrawal without required fields');
+          return;
+        }
+
+        console.log(`\nLedger: Recording withdrawal ${referenceId} for ${userId}...`);
+        try {
+          await db.transaction(async (tx) => {
+            const [txRecord] = await tx.insert(transactions).values({
+              referenceId,
+              type: 'WITHDRAWAL',
+              status: 'COMPLETED',
+            }).onConflictDoNothing().returning();
+
+            if (!txRecord) {
+              return;
+            }
+
+            await tx.insert(ledgerEntries).values({
+              transactionId: txRecord.id,
+              userId: userId,
+              asset: asset.toUpperCase(),
+              amount: amount.toString(),
+              direction: 'DEBIT',
+            });
+            console.log(`Ledger: Withdrawal ${referenceId} recorded — DEBIT ${amount} ${asset} for ${userId}`);
+          });
+        } catch (error) {
+          console.error(`Ledger: Failed to record withdrawal:`, error);
         }
         return;
       }

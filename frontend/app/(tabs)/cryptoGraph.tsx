@@ -14,7 +14,7 @@ import Animated, {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import Svg, { Path, Line, Rect } from 'react-native-svg';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
@@ -117,12 +117,38 @@ function formatLabel(time: number, period: Period) {
     : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function pickAxisLabels(labels: string[]) {
+// Evenly-spaced index picker for x-axis time labels — scales with however
+// many labels we ask for, instead of a fixed 4-point [0, n/3, 2n/3, n-1] split
+// that produced uneven/inaccurate spacing depending on window size.
+function pickAxisLabels(labels: string[], count = 5) {
   const n = labels.length;
   if (n === 0) return [];
-  if (n <= 4) return labels;
-  const idxs = [0, Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1];
-  return idxs.map((i) => labels[i]);
+  if (n <= count) return labels;
+  const idxSet = new Set<number>();
+  for (let i = 0; i < count; i++) {
+    idxSet.add(Math.round((i * (n - 1)) / (count - 1)));
+  }
+  return Array.from(idxSet).map((i) => labels[i]);
+}
+
+function formatPrice(v: number) {
+  if (v >= 1000) return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (v >= 1) return v.toFixed(2);
+  return v.toFixed(6);
+}
+
+// Builds a consistent set of price gridlines/labels anchored to real pixel
+// positions inside the chart box, instead of 3 sparse labels living outside
+// the chart in their own rows (which could clip or misalign against the
+// actual plotted line/candles).
+function buildPriceLabels(max: number, min: number, height: number, steps = 4) {
+  const range = max - min || 1;
+  const out: { y: number; label: string }[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const value = max - (range * i) / steps;
+    out.push({ y: (height * i) / steps, label: formatPrice(value) });
+  }
+  return out;
 }
 
 function buildLinePath(points: number[], width: number, height: number) {
@@ -229,10 +255,12 @@ function useChartGesture({
   totalLength,
   chartW,
   onEdgeReached,
+  onGestureActiveChange,
 }: {
   totalLength: number;
   chartW: number;
   onEdgeReached: () => void;
+  onGestureActiveChange?: (active: boolean) => void;
 }) {
   const [windowStart, setWindowStart] = useState(0);
   const [windowSize, setWindowSize] = useState(totalLength);
@@ -243,12 +271,14 @@ function useChartGesture({
   const windowSizeRef = useRef(windowSize);
   const chartWRef = useRef(chartW);
   const onEdgeReachedRef = useRef(onEdgeReached);
+  const onGestureActiveChangeRef = useRef(onGestureActiveChange);
 
   useEffect(() => { totalLengthRef.current = totalLength; }, [totalLength]);
   useEffect(() => { windowStartRef.current = windowStart; }, [windowStart]);
   useEffect(() => { windowSizeRef.current = windowSize; }, [windowSize]);
   useEffect(() => { chartWRef.current = chartW; }, [chartW]);
   useEffect(() => { onEdgeReachedRef.current = onEdgeReached; }, [onEdgeReached]);
+  useEffect(() => { onGestureActiveChangeRef.current = onGestureActiveChange; }, [onGestureActiveChange]);
 
   const gestureRef = useRef({
     mode: 'none' as 'none' | 'pinch' | 'pan' | 'scrub',
@@ -272,9 +302,21 @@ function useChartGesture({
   const panHandlers = useMemo(
     () =>
       PanResponder.create({
+        // Claim two-finger touches in the CAPTURE phase so the parent
+        // ScrollView's native pan recognizer never gets first look at a
+        // pinch gesture and cancels it mid-stream.
+        onStartShouldSetPanResponderCapture: (evt: GestureResponderEvent) =>
+          evt.nativeEvent.touches.length >= 2,
+        onMoveShouldSetPanResponderCapture: (evt: GestureResponderEvent) =>
+          evt.nativeEvent.touches.length >= 2,
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
+        // Once we have the gesture, never release it back to an ancestor
+        // (this is what let the ScrollView steal pan/scrub mid-touch before).
+        onPanResponderTerminationRequest: () => false,
+
         onPanResponderGrant: (evt: GestureResponderEvent) => {
+          onGestureActiveChangeRef.current?.(true);
           const touches = evt.nativeEvent.touches;
           const now = Date.now();
           if (touches.length >= 2) {
@@ -296,6 +338,7 @@ function useChartGesture({
             gestureRef.current.panStartWindowStart = windowStartRef.current;
           }
         },
+
         onPanResponderMove: (evt: GestureResponderEvent, gestureState: PanResponderGestureState) => {
           const touches = evt.nativeEvent.touches;
 
@@ -348,13 +391,16 @@ function useChartGesture({
             setWindowStart(Math.round(newStart));
           }
         },
+
         onPanResponderRelease: () => {
           gestureRef.current.mode = 'none';
           setScrubIndex(null);
+          onGestureActiveChangeRef.current?.(false);
         },
         onPanResponderTerminate: () => {
           gestureRef.current.mode = 'none';
           setScrubIndex(null);
+          onGestureActiveChangeRef.current?.(false);
         },
       }),
     [resetView]
@@ -364,9 +410,9 @@ function useChartGesture({
 }
 
 function ChartFrame({
-  maxLabel, midLabel, minLabel, xLabels, panHandlers, children, scrubLineX, tooltip, loadingMore,
+  priceLabels, xLabels, panHandlers, children, scrubLineX, tooltip, loadingMore,
 }: {
-  maxLabel: string; midLabel: string; minLabel: string; xLabels: string[];
+  priceLabels: { y: number; label: string }[]; xLabels: string[];
   panHandlers: any; children: React.ReactNode; scrubLineX: number | null;
   tooltip: React.ReactNode; loadingMore: boolean;
 }) {
@@ -377,19 +423,22 @@ function ChartFrame({
           <Text style={styles.loadingMoreText}>Loading earlier data…</Text>
         </View>
       )}
-      <View style={styles.chartLabelsRow}>
-        <Text style={styles.chartMaxLabel}>{maxLabel}</Text>
-      </View>
       <View style={{ width: CHART_W, height: CHART_H, marginLeft: CHART_PAD }}>
-        <View style={[styles.gridLine, { top: 0 }]} />
-        <View style={[styles.gridLine, { top: CHART_H / 2 }]} />
-        <View style={[styles.gridLine, { top: CHART_H - 1 }]} />
-        <Text style={styles.gridMidLabel}>{midLabel}</Text>
+        {priceLabels.map((p, i) => (
+          <Fragment key={i}>
+            <View style={[styles.gridLine, { top: p.y }]} />
+            <Text
+              style={[
+                styles.gridPriceLabel,
+                { top: Math.min(Math.max(p.y - 7, 0), CHART_H - 14) },
+              ]}
+            >
+              {p.label}
+            </Text>
+          </Fragment>
+        ))}
         {children}
         {scrubLineX !== null && <View style={[styles.scrubLine, { left: scrubLineX }]} />}
-      </View>
-      <View style={styles.chartLabelsRow}>
-        <Text style={styles.chartMinLabel}>{minLabel}</Text>
       </View>
       <View style={styles.xAxisRow}>
         {xLabels.map((l, i) => (
@@ -448,9 +497,7 @@ function PriceChartBase({
 
   return (
     <ChartFrame
-      maxLabel={max.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-      midLabel={((max + min) / 2).toLocaleString('en-US', { maximumFractionDigits: 2 })}
-      minLabel={min.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      priceLabels={buildPriceLabels(max, min, CHART_H)}
       xLabels={pickAxisLabels(labels)}
       panHandlers={panHandlers}
       scrubLineX={scrubX}
@@ -545,9 +592,7 @@ function CandlestickChartBase({
 
   return (
     <ChartFrame
-      maxLabel={max.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-      midLabel={((max + min) / 2).toLocaleString('en-US', { maximumFractionDigits: 2 })}
-      minLabel={min.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+      priceLabels={buildPriceLabels(max, min, CHART_H)}
       xLabels={pickAxisLabels(labels)}
       panHandlers={panHandlers}
       scrubLineX={scrubCandle ? scrubCandle.cx : null}
@@ -861,6 +906,8 @@ export default function CoinDetail() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { symbol: rawSymbol } = useLocalSearchParams<{ symbol: string }>();
+  const navigation = useNavigation<any>();
+  const scrollRef = useRef<ScrollView>(null);
   const symbol = (rawSymbol ?? 'BTCUSDT').toUpperCase();
 
   const meta = useMemo(
@@ -877,6 +924,11 @@ export default function CoinDetail() {
   const [candles, setCandles] = useState<CandleSet | null>(null);
   const [ticker, setTicker] = useState<{ high: number; low: number; volume: number; changePct: number } | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Tracks whether a touch is currently active on the chart itself, so the
+  // outer ScrollView can be disabled for the duration — this is what lets
+  // pinch-zoom and left-edge panning (which triggers history loading) work
+  // instead of the ScrollView stealing the touch.
+  const [chartTouchActive, setChartTouchActive] = useState(false);
   const loadingMoreRef = useRef(false);
   const candlesRef = useRef<CandleSet | null>(null);
   useEffect(() => { candlesRef.current = candles; }, [candles]);
@@ -887,6 +939,7 @@ export default function CoinDetail() {
   );
 
   const handleChartTypeChange = useCallback((t: 'candles' | 'line') => setChartType(t), []);
+  const handleGestureActiveChange = useCallback((active: boolean) => setChartTouchActive(active), []);
 
   const loadOlder = useCallback(async () => {
     const current = candlesRef.current;
@@ -927,7 +980,12 @@ export default function CoinDetail() {
   }, [period, symbol]);
 
   const totalLength = candles?.close.length ?? 0;
-  const chartGesture = useChartGesture({ totalLength, chartW: CHART_W, onEdgeReached: loadOlder });
+  const chartGesture = useChartGesture({
+    totalLength,
+    chartW: CHART_W,
+    onEdgeReached: loadOlder,
+    onGestureActiveChange: handleGestureActiveChange,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -1007,6 +1065,15 @@ export default function CoinDetail() {
 
   const isZoomed = totalLength > 0 && chartGesture.windowSize < totalLength;
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', () => {
+      if (navigation.isFocused()) {
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   return (
     <View style={styles.root}>
       <AmbientField />
@@ -1016,6 +1083,10 @@ export default function CoinDetail() {
         keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
       >
         <ScrollView
+          ref={scrollRef}
+          // Disabled while a touch is active on the chart so pinch/pan
+          // gestures aren't cancelled by the ScrollView's own recognizer.
+          scrollEnabled={!chartTouchActive}
           contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 140 }]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -1135,11 +1206,16 @@ const styles = StyleSheet.create({
   chartPanel: { borderRadius: 24, paddingVertical: 17, paddingHorizontal: 0, borderWidth: 1, borderColor: T.glassBorderHi },
   chartEmpty: { justifyContent: 'center', alignItems: 'center' },
   chartEmptyText: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },
-  chartLabelsRow: { paddingHorizontal: 18, marginBottom: 2 },
-  chartMaxLabel: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, alignSelf: 'flex-end' },
-  chartMinLabel: { fontSize: 10, fontFamily: FontFamily.body, color: T.textTer, alignSelf: 'flex-end', marginTop: 4 },
   gridLine: { position: 'absolute', left: 0, right: 0, height: StyleSheet.hairlineWidth, backgroundColor: T.hairline },
-  gridMidLabel: { position: 'absolute', right: 2, top: CHART_H / 2 - 12, fontSize: 9, fontFamily: FontFamily.body, color: T.textTer, backgroundColor: T.bg0, paddingHorizontal: 3 },
+  gridPriceLabel: {
+    position: 'absolute',
+    right: 2,
+    fontSize: 9,
+    fontFamily: FontFamily.body,
+    color: T.textTer,
+    backgroundColor: T.bg0,
+    paddingHorizontal: 3,
+  },
   scrubLine: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
   scrubDot: { position: 'absolute', width: 10, height: 10, borderRadius: 5, backgroundColor: T.bg0, borderWidth: 2 },
   scrubTooltip: {

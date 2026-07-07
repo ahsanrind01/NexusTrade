@@ -7,6 +7,7 @@ import walletRoutes from './routes/walletRoutes';
 import { startBalanceConsumer } from './services/balanceConsumer';
 import { startFundingConsumer } from './services/fundingConsumer';
 import { startOrderSettlementConsumer } from './services/orderSettlementConsumer';
+import { startPortfolioSnapshotJob } from './services/portfolioSnapshotService';
 import { warmUpCache } from './cache/warmUpCache';
 
 const app = express();
@@ -20,6 +21,7 @@ const start = async () => {
   await startBalanceConsumer();  
   await startFundingConsumer();
   await startOrderSettlementConsumer();
+  await startPortfolioSnapshotJob();
 
   app.listen(3004, () => {
     console.log('Wallet Query Service running on port 3004');

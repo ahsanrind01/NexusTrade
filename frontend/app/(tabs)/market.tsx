@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo, useEffect } from 'react';
+import { useState, useCallback, useMemo, memo, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList,
   TouchableOpacity, TextInput,
@@ -14,7 +14,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useRouter, type Router } from 'expo-router';
 import Svg, { Path, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { FontFamily } from '../../constants/typography';
@@ -518,6 +518,8 @@ const LIST_COLUMN_HEADER = (
 export default function Market() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const navigation = useNavigation<any>();
+  const listRef = useRef<FlatList<any>>(null);
 
   const ticker24h = useMarketStore((s) => s.ticker24h);
   const connected = useMarketStore((s) => s.connected);
@@ -566,6 +568,15 @@ export default function Market() {
   const handleSearchBlur = useCallback(() => setSearchFocused(false), []);
   const handleSearchClear = useCallback(() => setSearch(''), []);
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', () => {
+      if (navigation.isFocused()) {
+        listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   const ListHeader = useMemo(() => (
     <>
       <TopBar connected={connected} />
@@ -607,6 +618,7 @@ export default function Market() {
       <AmbientField />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <FlatList
+          ref={listRef}
           data={filtered}
           renderItem={renderItem}
           keyExtractor={keyExtractor}

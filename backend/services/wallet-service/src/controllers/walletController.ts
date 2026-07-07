@@ -4,12 +4,12 @@ import {
   getWalletSnapshot,
   reserveWalletBalance,
   releaseReservation,
-  adjustTotalBalance,
 } from '../services/walletState';
 import {
   getTransferHistory,
   transferWalletFunds,
 } from '../services/transferService';
+import { getPortfolioHistory, type PortfolioHistoryRange } from '../services/portfolioSnapshotService';
 
 export const getBalance = async (req: GatewayRequest, res: Response) => {
   try {
@@ -167,24 +167,29 @@ export const transferFunds = async (req: GatewayRequest, res: Response) => {
   }
 };
 
-export const syncTotalBalance = async (req: GatewayRequest, res: Response) => {
+export const portfolioHistory = async (req: GatewayRequest, res: Response) => {
   try {
     const userId = req.userId;
-    const { asset, newTotal } = req.body ?? {};
+    const range = typeof req.query.range === 'string' ? req.query.range : '24h';
+    const allowedRanges: PortfolioHistoryRange[] = ['24h', '7d', '30d'];
 
-    if (!userId || typeof asset !== 'string' || typeof newTotal !== 'number' || !Number.isFinite(newTotal) || newTotal < 0) {
-      return res.status(400).json({ success: false, error: 'Missing required sync fields' });
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const state = await adjustTotalBalance(userId, asset, newTotal);
+    if (!allowedRanges.includes(range as PortfolioHistoryRange)) {
+      return res.status(400).json({ success: false, error: 'Invalid range. Use 24h, 7d, or 30d.' });
+    }
+
+    const snapshots = await getPortfolioHistory(userId, range as PortfolioHistoryRange);
 
     return res.status(200).json({
       success: true,
-      asset: asset.toUpperCase(),
-      ...state,
+      range,
+      snapshots,
     });
   } catch (error) {
-    console.error('Sync total balance error:', error);
+    console.error('Get portfolio history error:', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 };

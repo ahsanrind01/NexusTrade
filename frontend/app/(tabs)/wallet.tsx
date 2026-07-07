@@ -5,6 +5,7 @@ import {
   Modal, TextInput, Platform,
   Alert, ActivityIndicator, Keyboard, TouchableWithoutFeedback,
 } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
 import { useStripe } from '@stripe/stripe-react-native';
 import Animated, {
   FadeIn, FadeInDown,
@@ -15,14 +16,15 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native';
 import { useShallow } from 'zustand/react/shallow';
 import { FontFamily } from '../../constants/typography';
 import { useWallet } from '../../hooks/useWallet';
 import { useTransferFunds, useWalletTransfers, type WalletTransferRecord } from '../../hooks/useWallet';
+import { useMyTrades } from '../../hooks/useOrders';
 import { useWalletStore, PRICE_MAP } from '../../stores/walletStore';
 import { useMarketStore } from '../../stores/marketStore';
-import { useTicker24h } from '../../hooks/useTicker24h';
+import { useUnrealizedPortfolioPnl } from '../../hooks/useUnrealizedPortfolioPnl';
 import {
   useFundingHistory,
   useCreateDepositIntent,
@@ -57,6 +59,7 @@ const T = {
   textTer: '#60657A',
 };
 
+const FIAT_ASSETS = new Set(['USDT', 'USDC']);
 const ASSET_META: Record<string, { name: string; color: string; symbol: string }> = {
   USDT:  { name: 'Tether',    color: '#26A17B', symbol: '$' },
   BTC:   { name: 'Bitcoin',   color: '#F7931A', symbol: '₿' },
@@ -75,7 +78,6 @@ const ASSET_META: Record<string, { name: string; color: string; symbol: string }
   ARB:   { name: 'Arbitrum',  color: '#6FB6F2', symbol: 'A' },
 };
 
-const FIAT_ASSETS = new Set(['USDT', 'USDC']);
 const CRYPTO_ASSETS = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK', 'NEAR', 'APT', 'INJ', 'ARB'] as const;
 const MODAL_ASSETS = ['USDT', ...CRYPTO_ASSETS] as const;
 
@@ -1036,15 +1038,15 @@ function sortHistoryItems(items: HistoryItem[]) {
 
 export default function Wallet() {
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
+  const navigation = useNavigation<any>();
 
   const { isLoading, refetch } = useWallet();
   const { isLoading: transferHistoryLoading, refetch: refetchTransfers, data: transferRecords = [] } = useWalletTransfers();
+  const { refetch: refetchTrades, data: tradeRecords = [] } = useMyTrades();
 
   const balances = useWalletStore((s) => s.balances);
   const totalUsd = useWalletStore((s) => s.totalUsd);
-  const ticker24h = useMarketStore((s) => s.ticker24h);
-
-  useTicker24h();
 
   const [modalMode, setModalMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [modalVisible, setModalVisible] = useState(false);
@@ -1054,6 +1056,15 @@ export default function Wallet() {
 
   const scrollRef = useRef<ScrollView>(null);
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', () => {
+      if (navigation.isFocused()) {
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   useFocusEffect(
     useCallback(() => {
       scrollRef.current?.scrollTo({ y: 0, animated: false });
@@ -1061,7 +1072,8 @@ export default function Wallet() {
       refetch();
       refetchHistory();
       refetchTransfers();
-    }, [refetch, refetchHistory, refetchTransfers])
+      refetchTrades();
+    }, [refetch, refetchHistory, refetchTransfers, refetchTrades])
   );
 
   const transactions = useFundingStore((s) => s.transactions);
@@ -1090,22 +1102,7 @@ export default function Wallet() {
     return out;
   }));
 
-  const portfolioPnl = useMemo(() => {
-    let pnlUsd = 0;
-    let prevTotal = 0;
-
-    for (const [asset, balance] of assetList) {
-      const price = livePrices[asset] ?? PRICE_MAP[asset] ?? 0;
-      const usdValue = balance * price;
-      const changePercent = FIAT_ASSETS.has(asset) ? 0 : (ticker24h[`${asset}USDT`]?.change ?? 0);
-      const prevValue = changePercent ? usdValue / (1 + changePercent / 100) : usdValue;
-      pnlUsd += usdValue - prevValue;
-      prevTotal += prevValue;
-    }
-
-    const pnlPercent = prevTotal > 0 ? (pnlUsd / prevTotal) * 100 : 0;
-    return { pnlUsd, pnlPercent };
-  }, [assetList, livePrices, ticker24h]);
+  const portfolioPnl = useUnrealizedPortfolioPnl(balances, livePrices, tradeRecords);
 
   const openDeposit = useCallback(() => {
     setModalMode('deposit');
@@ -1128,24 +1125,27 @@ export default function Wallet() {
     refetch();
     refetchHistory();
     refetchTransfers();
-  }, [refetch, refetchHistory, refetchTransfers]);
+    refetchTrades();
+    queryClient.invalidateQueries({ queryKey: ['wallet-portfolio-history'] });
+  }, [queryClient, refetch, refetchHistory, refetchTransfers, refetchTrades]);
 
   const onTransferSuccess = useCallback(() => {
     refetch();
     refetchHistory();
     refetchTransfers();
-  }, [refetch, refetchHistory, refetchTransfers]);
+    refetchTrades();
+  }, [refetch, refetchHistory, refetchTransfers, refetchTrades]);
 
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   const onRefresh = useCallback(async () => {
     setIsManualRefreshing(true);
     try {
-      await Promise.all([refetch(), refetchHistory(), refetchTransfers()]);
+      await Promise.all([refetch(), refetchHistory(), refetchTransfers(), refetchTrades()]);
     } finally {
       setIsManualRefreshing(false);
     }
-  }, [refetch, refetchHistory, refetchTransfers]);
+  }, [refetch, refetchHistory, refetchTransfers, refetchTrades]);
 
   const handleSectionAssets = useCallback(() => setActiveSection('assets'), []);
   const handleSectionHistory = useCallback(() => setActiveSection('history'), []);
@@ -1216,25 +1216,37 @@ export default function Wallet() {
 
               <View style={styles.heroDeltaRow}>
                 {isLoading ? null : assetList.length === 0 ? (
-                  <View style={styles.heroDeltaBadge}>
-                    <Text style={styles.heroDeltaText}>No holdings yet</Text>
+                  <View style={styles.heroDeltaStack}>
+                    <Text style={styles.heroDeltaLabel}>UNREALIZED P/L</Text>
+                    <View style={styles.heroDeltaBadge}>
+                      <Text style={styles.heroDeltaText}>No holdings yet</Text>
+                    </View>
                   </View>
                 ) : (
-                  <View style={[
-                    styles.heroDeltaBadge,
-                    portfolioPnl.pnlUsd < 0 && {
-                      backgroundColor: T.lossDim,
-                      borderColor: 'rgba(255,107,122,0.2)',
-                    },
-                  ]}>
-                    <Text style={[
-                      styles.heroDeltaText,
-                      { color: portfolioPnl.pnlUsd >= 0 ? T.gain : T.loss },
-                    ]}>
-                      {portfolioPnl.pnlUsd >= 0 ? '↑ +' : '↓ -'}
-                      ${Math.abs(portfolioPnl.pnlUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      {' '}({portfolioPnl.pnlPercent >= 0 ? '+' : '-'}{Math.abs(portfolioPnl.pnlPercent).toFixed(2)}%)
-                    </Text>
+                  <View style={styles.heroDeltaStack}>
+                    <Text style={styles.heroDeltaLabel}>UNREALIZED P/L</Text>
+                    {portfolioPnl.hasCostBasisData ? (
+                      <View style={[
+                        styles.heroDeltaBadge,
+                        portfolioPnl.pnlUsd < 0 && {
+                          backgroundColor: T.lossDim,
+                          borderColor: 'rgba(255,107,122,0.2)',
+                        },
+                      ]}>
+                        <Text style={[
+                          styles.heroDeltaText,
+                          { color: portfolioPnl.pnlUsd >= 0 ? T.gain : T.loss },
+                        ]}>
+                          {portfolioPnl.pnlUsd >= 0 ? '↑ +' : '↓ -'}
+                          ${Math.abs(portfolioPnl.pnlUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {' '}({portfolioPnl.pnlPercent >= 0 ? '+' : '-'}{Math.abs(portfolioPnl.pnlPercent).toFixed(2)}%)
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.heroDeltaBadge, { backgroundColor: T.glass, borderColor: T.glassBorder }]}>
+                        <Text style={[styles.heroDeltaText, { color: T.textSec }]}>No cost basis data</Text>
+                      </View>
+                    )}
                   </View>
                 )}
                 <Text style={styles.heroAssetCount}>{assetList.length} assets</Text>
@@ -1429,7 +1441,9 @@ const styles = StyleSheet.create({
   heroBadgeText: { fontSize: 9, fontFamily: FontFamily.heading, color: T.gain, letterSpacing: 1.4 },
   heroLoader: { marginVertical: 16 },
   heroValue: { fontSize: 42, fontFamily: FontFamily.heading, color: T.textPri, letterSpacing: -1.5, marginBottom: 10, maxWidth: width * 0.62 },
-  heroDeltaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  heroDeltaRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  heroDeltaStack: { gap: 6 },
+  heroDeltaLabel: { fontSize: 9, fontFamily: FontFamily.heading, color: T.textTer, letterSpacing: 1.6 },
   heroDeltaBadge: { backgroundColor: T.gainDim, borderRadius: 7, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: 'rgba(61,220,151,0.2)' },
   heroDeltaText: { fontSize: 12, fontFamily: FontFamily.heading, color: T.gain },
   heroAssetCount: { fontSize: 12, fontFamily: FontFamily.body, color: T.textTer },

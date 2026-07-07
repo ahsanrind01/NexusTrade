@@ -15,7 +15,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useMarketSocket } from '../../hooks/useMarketSocket';
@@ -401,6 +401,7 @@ const AmbientField = memo(function AmbientField() {
 
 export default function Trade() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
 
   useMarketSocket();
 
@@ -413,6 +414,15 @@ export default function Trade() {
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', () => {
+      if (navigation.isFocused()) {
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   useFocusEffect(
     useCallback(() => {

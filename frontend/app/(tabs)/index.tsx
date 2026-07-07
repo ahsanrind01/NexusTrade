@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo, useEffect } from 'react';
+import { useState, useCallback, useMemo, memo, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Dimensions, TextInput, KeyboardAvoidingView, Platform,
@@ -13,7 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useShallow } from 'zustand/react/shallow';
 import Svg, { Path, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
@@ -22,12 +22,12 @@ import { useMarketStore } from '../../stores/marketStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useMarketSocket } from '../../hooks/useMarketSocket';
 import { useTicker24h } from '../../hooks/useTicker24h';
-import { useWallet } from '../../hooks/useWallet';
+import { usePortfolioHistory, useWallet } from '../../hooks/useWallet';
 import { useWalletStore } from '../../stores/walletStore';
 import { useMyOrders } from '../../hooks/useOrders';
 import { useOrderStore } from '../../stores/orderStore';
 import { useFundingHistory } from '../../hooks/useFunding';
-import { useFundingStore, FundingTransaction } from '../../stores/fundingStore';
+import { useFundingStore } from '../../stores/fundingStore';
 
 let BlurView: any = null;
 try { BlurView = require('expo-blur').BlurView; } catch {}
@@ -394,31 +394,24 @@ function AmbientField() {
   );
 }
 
-function usePortfolioSeries(transactions: FundingTransaction[]) {
+function usePortfolioSeries() {
+  const { data: snapshots = [] } = usePortfolioHistory('24h');
   return useMemo(() => {
-    const completed = transactions
-      .filter((t) => t.status === 'COMPLETED')
-      .slice()
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-
-    if (completed.length === 0) return { points: [] as number[], hasData: false };
-
-    let running = 0;
-    const points = completed.map((t) => {
-      const amt = parseFloat(t.amount) || 0;
-      running += t.direction === 'DEPOSIT' ? amt : -amt;
-      return running;
-    });
-
-    const trimmed = points.length > 12 ? points.slice(-12) : points;
-    if (trimmed.length === 1) {
-      // Give the first completed transaction a visible baseline so the
-      // portfolio chart renders immediately after the first deposit.
-      return { points: [0, trimmed[0]], hasData: true };
+    if (snapshots.length === 0) {
+      return { points: [] as number[], hasData: false };
     }
 
-    return { points: trimmed, hasData: trimmed.length >= 2 };
-  }, [transactions]);
+    const points = snapshots
+      .slice()
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .map((snapshot) => snapshot.totalUsdValue);
+
+    if (points.length === 1) {
+      return { points: [0, points[0]], hasData: true };
+    }
+
+    return { points, hasData: points.length >= 2 };
+  }, [snapshots]);
 }
 
 const PortfolioCard = memo(function PortfolioCard({
@@ -502,12 +495,12 @@ const PortfolioCard = memo(function PortfolioCard({
               <PortfolioGraph points={series} positive={seriesPositive} width={width - 108} height={72} />
             ) : (
               <View style={styles.chartEmpty}>
-                <Text style={styles.chartEmptyText}>No deposit activity yet — fund your account to see it here</Text>
+                <Text style={styles.chartEmptyText}>No portfolio history yet — fund your account to see it here</Text>
               </View>
             )}
           </View>
           {hasSeriesData && (
-            <Text style={styles.chartCaption}>Net deposits over your recent activity</Text>
+            <Text style={styles.chartCaption}>Portfolio value over time</Text>
           )}
         </View>
 
@@ -706,6 +699,8 @@ const ROW_HEIGHT = 74;
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const navigation = useNavigation<any>();
+  const listRef = useRef<FlatList<any>>(null);
   const user = useAuthStore((s) => s.user);
   const connected = useMarketStore((s) => s.connected);
   const ticker24h = useMarketStore((s) => s.ticker24h);
@@ -733,7 +728,7 @@ export default function Home() {
     () => transactions.some((t) => Date.now() - new Date(t.createdAt).getTime() < 1000 * 60 * 60 * 24),
     [transactions]
   );
-  const { points: portfolioSeries, hasData: hasSeriesData } = usePortfolioSeries(transactions);
+  const { points: portfolioSeries, hasData: hasSeriesData } = usePortfolioSeries();
 
   const greeting = useMemo(() => {
     const h = new Date().getHours();
@@ -762,6 +757,15 @@ export default function Home() {
   const handleNotifPress = useCallback(() => {
     router.push({ pathname: '/(tabs)/wallet', params: { action: 'history' } });
   }, [router]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', () => {
+      if (navigation.isFocused()) {
+        listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   const ListHeader = useMemo(() => (
     <>
@@ -824,6 +828,7 @@ export default function Home() {
       <AmbientField />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <FlatList
+          ref={listRef}
           data={top5Assets}
           renderItem={renderItem}
           keyExtractor={keyExtractor}

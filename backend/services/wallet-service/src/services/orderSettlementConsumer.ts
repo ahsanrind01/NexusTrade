@@ -1,6 +1,7 @@
 import { Kafka } from 'kafkajs';
 import { redis } from '../config/redis';
 import { consumeReservation, releaseReservation, getReservation } from './walletState';
+import { snapshotPortfolioValueForUser } from './portfolioSnapshotService';
 import { ensureKafkaTopics } from '../../../../shared/src/kafka/bootstrapTopics';
 
 const kafka = new Kafka({
@@ -25,18 +26,18 @@ const settleSide = async (params: {
   quoteAmount: number;
 }) => {
   const { userId, orderId, side, baseAsset, quoteAsset, baseAmount, quoteAmount } = params;
-  const reservation = await getReservation(userId, orderId);
-  if (!reservation) {
-    return;
-  }
-
   const spendAmount = side === 'BUY' ? quoteAmount : baseAmount;
+  const receivedAsset = side === 'BUY' ? baseAsset : quoteAsset;
+  const receivedAmount = side === 'BUY' ? baseAmount : quoteAmount;
 
   await consumeReservation({
     userId,
     orderId,
     spentAmount: spendAmount,
+    receivedAsset,
+    receivedAmount,
   });
+  await snapshotPortfolioValueForUser(userId);
 };
 
 export const startOrderSettlementConsumer = async () => {

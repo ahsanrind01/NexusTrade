@@ -16,6 +16,18 @@ async function fetchWalletTransfers() {
   return res.data.transfers as WalletTransferRecord[];
 }
 
+export type PortfolioHistoryRange = '24h' | '7d' | '30d';
+
+export interface PortfolioSnapshot {
+  timestamp: string;
+  totalUsdValue: number;
+}
+
+async function fetchPortfolioHistory(range: PortfolioHistoryRange) {
+  const res = await api.get('/wallet/portfolio-history', { params: { range } });
+  return res.data.snapshots as PortfolioSnapshot[];
+}
+
 interface TransferFundsInput {
   recipient: string;
   asset: string;
@@ -91,6 +103,19 @@ export function useWalletTransfers() {
     enabled: !!token,
     staleTime: 1000 * 10,
     refetchInterval: 1000 * 15,
+    retry: 2,
+  });
+}
+
+export function usePortfolioHistory(range: PortfolioHistoryRange = '24h') {
+  const token = useAuthStore((s) => s.token);
+
+  return useQuery({
+    queryKey: ['wallet-portfolio-history', range],
+    queryFn: () => fetchPortfolioHistory(range),
+    enabled: !!token,
+    staleTime: 1000 * 60,
+    refetchInterval: 1000 * 60,
     retry: 2,
   });
 }

@@ -249,8 +249,17 @@ export const consumeReservation = async (params: {
   userId: string;
   orderId: string;
   spentAmount: number;
+  receivedAsset?: string;
+  receivedAmount?: number;
 }) => {
-  const { userId, orderId, spentAmount } = params;
+  const {
+    userId,
+    orderId,
+    spentAmount,
+    receivedAsset,
+    receivedAmount = 0,
+  } = params;
+  const normalizedReceivedAsset = receivedAsset?.toUpperCase();
 
   while (true) {
     await redis.watch(lockedKey(userId), availableKey(userId), totalKey(userId), reservationKey(userId));
@@ -270,17 +279,52 @@ export const consumeReservation = async (params: {
     }
 
     const normalizedAsset = reservation.asset.toUpperCase();
-    const currentLocked = parseNumber(await redis.hget(lockedKey(userId), normalizedAsset));
-    const currentTotal = parseNumber(await redis.hget(totalKey(userId), normalizedAsset));
+    const assetUpdates = new Map<string, { totalDelta: number; lockedDelta: number }>();
+
+    const currentBalances = await Promise.all(
+      [...new Set([normalizedAsset, ...(normalizedReceivedAsset ? [normalizedReceivedAsset] : [])])].map(async (asset) => [
+        asset,
+        {
+          total: parseNumber(await redis.hget(totalKey(userId), asset)),
+          locked: parseNumber(await redis.hget(lockedKey(userId), asset)),
+        },
+      ] as const)
+    );
+    const balanceMap = new Map(currentBalances);
+    const currentSpent = balanceMap.get(normalizedAsset);
+    const currentLocked = currentSpent?.locked ?? 0;
     const consumedAmount = Math.min(spentAmount, reservation.remainingAmount, currentLocked);
-    const nextLocked = Math.max(currentLocked - consumedAmount, 0);
-    const nextAvailable = Math.max(currentTotal - nextLocked, 0);
+
+    const addDelta = (asset: string, totalDelta: number, lockedDelta: number) => {
+      const currentUpdate = assetUpdates.get(asset) ?? { totalDelta: 0, lockedDelta: 0 };
+      currentUpdate.totalDelta += totalDelta;
+      currentUpdate.lockedDelta += lockedDelta;
+      assetUpdates.set(asset, currentUpdate);
+    };
+
+    addDelta(normalizedAsset, -consumedAmount, -consumedAmount);
+    if (normalizedReceivedAsset && receivedAmount > 0 && consumedAmount > 0) {
+      addDelta(normalizedReceivedAsset, receivedAmount, 0);
+    }
+
     const nextRemaining = Math.max(reservation.remainingAmount - consumedAmount, 0);
 
     const tx = redis.multi();
-    tx.hset(availableKey(userId), normalizedAsset, nextAvailable);
-    tx.hset(lockedKey(userId), normalizedAsset, nextLocked);
-    tx.hset(legacyKey(userId), normalizedAsset, nextAvailable);
+    for (const [asset, deltas] of assetUpdates.entries()) {
+      const current = balanceMap.get(asset);
+      if (!current) {
+        continue;
+      }
+
+      const nextTotal = Math.max(current.total + deltas.totalDelta, 0);
+      const nextLocked = Math.max(current.locked + deltas.lockedDelta, 0);
+      const nextAvailable = Math.max(nextTotal - nextLocked, 0);
+
+      tx.hset(totalKey(userId), asset, nextTotal);
+      tx.hset(availableKey(userId), asset, nextAvailable);
+      tx.hset(lockedKey(userId), asset, nextLocked);
+      tx.hset(legacyKey(userId), asset, nextAvailable);
+    }
 
     if (nextRemaining > 0) {
       tx.hset(reservationKey(userId), orderId, JSON.stringify({
@@ -293,13 +337,16 @@ export const consumeReservation = async (params: {
 
     const result = await tx.exec();
     if (result) {
+      const spentState = balanceMap.get(normalizedAsset);
+      const nextSpentTotal = spentState ? Math.max(spentState.total - consumedAmount, 0) : 0;
+      const nextSpentLocked = spentState ? Math.max(spentState.locked - consumedAmount, 0) : 0;
       return {
         success: true,
         consumedAmount,
         remainingAmount: nextRemaining,
-        available: nextAvailable,
-        locked: nextLocked,
-        total: currentTotal,
+        available: Math.max(nextSpentTotal - nextSpentLocked, 0),
+        locked: nextSpentLocked,
+        total: nextSpentTotal,
       };
     }
   }

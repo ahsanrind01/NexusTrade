@@ -1,6 +1,7 @@
 import { Kafka } from 'kafkajs';
 import { redis } from '../config/redis';
-import { getWalletSnapshot, setWalletBalance } from './walletState';
+import { getWalletBalanceKeys, getWalletSnapshot } from './walletState';
+import { snapshotPortfolioValueForUser } from './portfolioSnapshotService';
 import { ensureKafkaTopics } from '../../../../shared/src/kafka/bootstrapTopics';
 
 const kafka = new Kafka({
@@ -50,14 +51,21 @@ export const startFundingConsumer = async () => {
             return;
           }
 
-          const snapshot = await getWalletSnapshot(userId);
           const assetKey = asset.toUpperCase();
-          const current = snapshot[assetKey] ?? { total: 0, available: 0, locked: 0 };
-          const nextTotal = current.total + parseFloat(amount);
-          const nextAvailable = current.available + parseFloat(amount);
+          const depositAmount = parseFloat(amount);
+          const keys = getWalletBalanceKeys(userId);
+          const multi = redis.multi();
 
-          await setWalletBalance(userId, assetKey, nextTotal, nextAvailable, current.locked);
-          console.log(`[Wallet Cache] Deposit ${eventId} applied. ${userId} new ${assetKey} balance: ${nextAvailable}`);
+          multi.hincrbyfloat(keys.total, assetKey, depositAmount);
+          multi.hincrbyfloat(keys.available, assetKey, depositAmount);
+          multi.hincrbyfloat(keys.legacy, assetKey, depositAmount);
+
+          await multi.exec();
+          await snapshotPortfolioValueForUser(userId);
+
+          const snapshot = await getWalletSnapshot(userId);
+          const current = snapshot[assetKey] ?? { total: 0, available: 0, locked: 0 };
+          console.log(`[Wallet Cache] Deposit ${eventId} applied. ${userId} new ${assetKey} balance: ${current.available}`);
         }
 
         if (topic === 'withdrawal-requested') {
@@ -77,29 +85,52 @@ export const startFundingConsumer = async () => {
           const assetKey = asset.toUpperCase();
 
           console.log(` [Wallet] Validating withdrawal ${transactionId} for ${amount} ${assetKey}...`);
-          
-          const snapshot = await getWalletSnapshot(userId);
-          const current = snapshot[assetKey] ?? { total: 0, available: 0, locked: 0 };
-          const currentBalance = current.available;
           const requestedAmount = parseFloat(amount);
 
-          if (currentBalance >= requestedAmount) {
-            const nextTotal = Math.max(current.total - requestedAmount, 0);
-            const nextAvailable = Math.max(current.available - requestedAmount, 0);
-            await setWalletBalance(userId, assetKey, nextTotal, nextAvailable, current.locked);
-            console.log(`[Wallet] Funds locked. New balance: ${nextAvailable}. Approving.`);
+          while (true) {
+            const keys = getWalletBalanceKeys(userId);
+            await redis.watch(keys.total, keys.available, keys.legacy);
 
-            await producer.send({
-              topic: 'withdrawal-validated',
-              messages: [{ value: JSON.stringify({ transactionId, userId, asset, amount, status: 'APPROVED' }) }]
-            });
-          } else {
-            console.log(`[Wallet] Insufficient funds (${currentBalance} < ${requestedAmount}). Rejecting.`);
+            const [currentTotalRaw, currentAvailableRaw] = await Promise.all([
+              redis.hget(keys.total, assetKey),
+              redis.hget(keys.available, assetKey),
+            ]);
 
-            await producer.send({
-              topic: 'withdrawal-rejected',
-              messages: [{ value: JSON.stringify({ transactionId, userId, asset, amount, status: 'REJECTED', reason: 'INSUFFICIENT_FUNDS' }) }]
-            });
+            const currentTotal = Number(currentTotalRaw ?? 0);
+            const currentAvailable = Number(currentAvailableRaw ?? 0);
+            const availableBalance = Number.isFinite(currentAvailable) ? currentAvailable : 0;
+            const totalBalance = Number.isFinite(currentTotal) ? currentTotal : 0;
+
+            if (availableBalance < requestedAmount) {
+              await redis.unwatch();
+              console.log(`[Wallet] Insufficient funds (${availableBalance} < ${requestedAmount}). Rejecting.`);
+
+              await producer.send({
+                topic: 'withdrawal-rejected',
+                messages: [{ value: JSON.stringify({ transactionId, userId, asset, amount, status: 'REJECTED', reason: 'INSUFFICIENT_FUNDS' }) }]
+              });
+              break;
+            }
+
+            const nextTotal = Math.max(totalBalance - requestedAmount, 0);
+            const nextAvailable = Math.max(availableBalance - requestedAmount, 0);
+
+            const tx = redis.multi();
+            tx.hset(keys.total, assetKey, nextTotal);
+            tx.hset(keys.available, assetKey, nextAvailable);
+            tx.hset(keys.legacy, assetKey, nextAvailable);
+
+            const result = await tx.exec();
+            if (result) {
+              await snapshotPortfolioValueForUser(userId);
+              console.log(`[Wallet] Funds locked. New balance: ${nextAvailable}. Approving.`);
+
+              await producer.send({
+                topic: 'withdrawal-validated',
+                messages: [{ value: JSON.stringify({ transactionId, userId, asset, amount, status: 'APPROVED' }) }]
+              });
+              break;
+            }
           }
         }
       },

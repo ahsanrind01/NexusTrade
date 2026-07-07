@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo, useEffect } from 'react';
+import { useState, useCallback, useMemo, memo, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, KeyboardAvoidingView, Platform,
@@ -13,7 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
@@ -278,6 +278,8 @@ function SettingsMenuRow({ icon, label, sublabel, onPress, disabled }: { icon: k
 export default function Profile() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const navigation = useNavigation<any>();
+  const scrollRef = useRef<ScrollView>(null);
 
   const { profile: user, isLoading: profileLoading } = useProfile();
   const updateProfileMutation = useUpdateProfile();
@@ -371,10 +373,20 @@ export default function Profile() {
   const saving = updateProfileMutation.isPending;
   const changingPwd = changePasswordMutation.isPending;
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', () => {
+      if (navigation.isFocused()) {
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   return (
     <View style={styles.root}>
       <AmbientField />
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 110 }]}
         showsVerticalScrollIndicator={false}

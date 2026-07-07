@@ -1,8 +1,30 @@
 import redis from '../config/redis';
 
+const BOOK_SEQ_WIDTH = 20;
+
+const formatBookSeq = (seq: number) => String(seq).padStart(BOOK_SEQ_WIDTH, '0');
+
+const getOrderBookSeqKey = (asset: string, side: string) => `orderbook:${asset}:${side}:seq`;
+
+const serializeOrder = async (asset: string, side: string, order: any) => {
+  if (typeof order.bookSeq === 'string' && order.bookSeq.length > 0) {
+    return JSON.stringify(order);
+  }
+
+  const seq = await redis.incr(getOrderBookSeqKey(asset, side));
+  const bookSeq = formatBookSeq(seq);
+  // Keep the queue sequence as the first serialized field so same-price
+  // members sort by arrival order inside Redis' member-string tie-break.
+  return JSON.stringify({
+    bookSeq,
+    ...order,
+  });
+};
+
 export const addOrder = async (asset: string, side: string, order: any) => {
   const key = `orderbook:${asset}:${side}`;
-  await redis.zadd(key, order.price, JSON.stringify(order));
+  const serialized = await serializeOrder(asset, side, order);
+  await redis.zadd(key, order.price, serialized);
 };
 
 export const getOrderCount = async (asset: string, side: string) => {
