@@ -9,9 +9,11 @@ import Animated, {
   useSharedValue, useAnimatedStyle,
   withSpring, withTiming, withRepeat, withSequence, Easing,
   interpolate,
+  cancelAnimation,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { FontFamily } from '../../constants/typography';
@@ -60,10 +62,20 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+      return;
+    }
     scale.value = withRepeat(withSequence(withTiming(2.2, { duration: 1100 }), withTiming(1, { duration: 0 })), -1, false);
     opacity.value = withRepeat(withSequence(withTiming(0, { duration: 1100 }), withTiming(0.9, { duration: 0 })), -1, false);
-  }, []);
+    return () => {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+    };
+  }, [isFocused]);
   const ringStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }], opacity: opacity.value }));
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
@@ -75,9 +87,15 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
 
 function AmbientField() {
   const drift = useSharedValue(0);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(drift);
+      return;
+    }
     drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, []);
+    return () => cancelAnimation(drift);
+  }, [isFocused]);
   const orb1 = useAnimatedStyle(() => ({
     transform: [{ translateX: interpolate(drift.value, [0, 1], [-12, 16]) }, { translateY: interpolate(drift.value, [0, 1], [-10, 12]) }],
   }));

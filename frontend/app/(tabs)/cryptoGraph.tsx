@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
+import { Fragment, useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Dimensions, TextInput, KeyboardAvoidingView, Platform,
@@ -15,6 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
+import Svg, { Path, Line, Rect } from 'react-native-svg';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -122,6 +123,19 @@ function pickAxisLabels(labels: string[]) {
   if (n <= 4) return labels;
   const idxs = [0, Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1];
   return idxs.map((i) => labels[i]);
+}
+
+function buildLinePath(points: number[], width: number, height: number) {
+  if (points.length < 2) return '';
+  const max = Math.max(...points);
+  const min = Math.min(...points);
+  const range = max - min || 1;
+  const step = width / (points.length - 1);
+  return points.reduce((d, point, index) => {
+    const x = index * step;
+    const y = height - ((point - min) / range) * height;
+    return `${d}${index === 0 ? 'M' : 'L'}${x} ${y}`;
+  }, '');
 }
 
 const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28, tint = 'dark' }: any) {
@@ -393,44 +407,16 @@ function PriceChartBase({
   points: number[]; labels: string[]; positive: boolean;
   scrubIndex: number | null; panHandlers: any; loadingMore: boolean;
 }) {
-  const { segments, max, min } = useMemo(() => {
-    if (points.length < 2) return { segments: null as any, max: 0, min: 0 };
+  const { max, min, pathD } = useMemo(() => {
+    if (points.length < 2) return { max: 0, min: 0, pathD: '' };
     const max = Math.max(...points);
     const min = Math.min(...points);
-    const range = max - min || 1;
-    const step = CHART_W / (points.length - 1);
-    const segs = points.slice(0, -1).map((p, i) => {
-      const x1 = i * step;
-      const y1 = CHART_H - ((p - min) / range) * CHART_H;
-      const x2 = (i + 1) * step;
-      const y2 = CHART_H - ((points[i + 1] - min) / range) * CHART_H;
-      const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-      const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
-      return { x1, y1, length, angle };
-    });
-    return { segments: segs, max, min };
+    return { max, min, pathD: buildLinePath(points, CHART_W, CHART_H) };
   }, [points]);
-
-  const segmentElements = useMemo(() => {
-    if (!segments) return null;
-    const color = positive ? T.gain : T.loss;
-    return segments.map((s: any, i: number) => (
-      <View
-        key={i}
-        style={{
-          position: 'absolute', left: s.x1, top: s.y1,
-          width: s.length, height: 2,
-          backgroundColor: color, borderRadius: 1,
-          transform: [{ rotate: `${s.angle}deg` }],
-          transformOrigin: '0 0',
-        }}
-      />
-    ));
-  }, [segments, positive]);
 
   const chartEmptyStyle = useMemo(() => [styles.chartEmpty, { height: CHART_H }], []);
 
-  if (!segments) {
+  if (!pathD) {
     return (
       <View style={chartEmptyStyle}>
         <Text style={styles.chartEmptyText}>Loading chart…</Text>
@@ -471,7 +457,16 @@ function PriceChartBase({
       tooltip={tooltip}
       loadingMore={loadingMore}
     >
-      {segmentElements}
+      <Svg width={CHART_W} height={CHART_H} style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Path
+          d={pathD}
+          fill="none"
+          stroke={positive ? T.gain : T.loss}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </Svg>
       {scrubDot}
     </ChartFrame>
   );
@@ -523,19 +518,6 @@ function CandlestickChartBase({
     return { candles: list, max, min };
   }, [open, high, low, close]);
 
-  const candleElements = useMemo(() => {
-    if (!candles) return null;
-    return candles.map((c: any, i: number) => {
-      const color = c.bullish ? T.gain : T.loss;
-      return (
-        <View key={i} style={{ position: 'absolute', left: c.cx - c.bodyW / 2, top: 0, width: c.bodyW, height: CHART_H }}>
-          <View style={{ position: 'absolute', left: c.bodyW / 2 - 0.75, top: c.yHigh, width: 1.5, height: Math.max(1, c.yLow - c.yHigh), backgroundColor: color, opacity: 0.7 }} />
-          <View style={{ position: 'absolute', left: 0, top: c.bodyTop, width: c.bodyW, height: c.bodyHeight, backgroundColor: color, borderRadius: 1 }} />
-        </View>
-      );
-    });
-  }, [candles]);
-
   const chartEmptyStyle = useMemo(() => [styles.chartEmpty, { height: CHART_H }], []);
 
   if (!candles) {
@@ -572,7 +554,33 @@ function CandlestickChartBase({
       tooltip={tooltip}
       loadingMore={loadingMore}
     >
-      {candleElements}
+      <Svg width={CHART_W} height={CHART_H} style={StyleSheet.absoluteFill} pointerEvents="none">
+        {candles.map((c: any, i: number) => {
+          const color = c.bullish ? T.gain : T.loss;
+          return (
+            <Fragment key={i}>
+              <Line
+                x1={c.cx}
+                y1={c.yHigh}
+                x2={c.cx}
+                y2={c.yLow}
+                stroke={color}
+                strokeWidth={1.5}
+                opacity={0.7}
+              />
+              <Rect
+                x={c.cx - c.bodyW / 2}
+                y={c.bodyTop}
+                width={c.bodyW}
+                height={c.bodyHeight}
+                fill={color}
+                rx={1}
+                ry={1}
+              />
+            </Fragment>
+          );
+        })}
+      </Svg>
     </ChartFrame>
   );
 }

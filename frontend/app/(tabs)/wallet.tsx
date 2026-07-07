@@ -11,10 +11,12 @@ import Animated, {
   useSharedValue, useAnimatedStyle,
   withSpring, withTiming, withRepeat,
   withSequence, interpolate, Easing,
+  cancelAnimation,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useShallow } from 'zustand/react/shallow';
 import { FontFamily } from '../../constants/typography';
 import { useWallet } from '../../hooks/useWallet';
 import { useTransferFunds, useWalletTransfers, type WalletTransferRecord } from '../../hooks/useWallet';
@@ -161,10 +163,20 @@ const SheetSurface = memo(function SheetSurface({ style, children, tint }: { sty
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+      return;
+    }
     scale.value = withRepeat(withSequence(withTiming(2.2, { duration: 1100 }), withTiming(1, { duration: 0 })), -1, false);
     opacity.value = withRepeat(withSequence(withTiming(0, { duration: 1100 }), withTiming(0.9, { duration: 0 })), -1, false);
-  }, []);
+    return () => {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+    };
+  }, [isFocused]);
   const ringStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }], opacity: opacity.value }));
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
@@ -176,9 +188,15 @@ const PulseDot = memo(function PulseDot({ color }: { color: string }) {
 
 const AmbientField = memo(function AmbientField() {
   const drift = useSharedValue(0);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(drift);
+      return;
+    }
     drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, []);
+    return () => cancelAnimation(drift);
+  }, [isFocused]);
   const orb1 = useAnimatedStyle(() => ({
     transform: [
       { translateX: interpolate(drift.value, [0, 1], [-10, 12]) },
@@ -1024,18 +1042,9 @@ export default function Wallet() {
 
   const balances = useWalletStore((s) => s.balances);
   const totalUsd = useWalletStore((s) => s.totalUsd);
-  const marketPrices = useMarketStore((s) => s.prices);
   const ticker24h = useMarketStore((s) => s.ticker24h);
 
   useTicker24h();
-
-  const livePrices = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const [symbol, data] of Object.entries(marketPrices)) {
-      out[symbol.replace('USDT', '')] = data.price;
-    }
-    return out;
-  }, [marketPrices]);
 
   const [modalMode, setModalMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [modalVisible, setModalVisible] = useState(false);
@@ -1065,6 +1074,21 @@ export default function Wallet() {
     Object.entries(balances).filter(([, v]) => v > 0),
     [balances]
   );
+
+  const heldAssets = useMemo(
+    () => assetList.map(([asset]) => asset),
+    [assetList]
+  );
+
+  const livePrices = useMarketStore(useShallow((s) => {
+    const out: Record<string, number> = {};
+    for (const asset of heldAssets) {
+      out[asset] = asset === 'USDT'
+        ? (PRICE_MAP[asset] ?? 1)
+        : (s.prices[`${asset}USDT`]?.price ?? PRICE_MAP[asset] ?? 0);
+    }
+    return out;
+  }));
 
   const portfolioPnl = useMemo(() => {
     let pnlUsd = 0;

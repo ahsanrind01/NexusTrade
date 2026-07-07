@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
 import { api } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
-import { useWalletStore } from '../stores/walletStore';
+import { PRICE_MAP, useWalletStore } from '../stores/walletStore';
 import { useMarketStore } from '../stores/marketStore';
+import { useShallow } from 'zustand/react/shallow';
 
 async function fetchWalletBalance() {
   const res = await api.get('/wallet/balance');
@@ -42,14 +42,7 @@ export interface WalletTransferRecord {
 
 export function useWallet() {
   const setBalances = useWalletStore((s) => s.setBalances);
-  const prices = useMarketStore((s) => s.prices);
   const token = useAuthStore((s) => s.token);
-
-  const livePrices: Record<string, number> = {};
-  for (const [symbol, data] of Object.entries(prices)) {
-    const asset = symbol.replace('USDT', '');
-    livePrices[asset] = data.price;
-  }
 
   const query = useQuery({
     queryKey: ['wallet-balance'],
@@ -60,11 +53,26 @@ export function useWallet() {
     retry: 2,
   });
 
+  const balanceAssets = useMemo(
+    () => Object.keys(query.data ?? {}),
+    [query.data]
+  );
+
+  const livePrices = useMarketStore(useShallow((s) => {
+    const next: Record<string, number> = {};
+    for (const asset of balanceAssets) {
+      next[asset] = asset === 'USDT'
+        ? (PRICE_MAP[asset] ?? 1)
+        : (s.prices[`${asset}USDT`]?.price ?? PRICE_MAP[asset] ?? 0);
+    }
+    return next;
+  }));
+
   useEffect(() => {
     if (query.data) {
       setBalances(query.data, livePrices);
     }
-  }, [query.data, prices]);
+  }, [query.data, livePrices, setBalances]);
 
   return {
     isLoading: query.isLoading,

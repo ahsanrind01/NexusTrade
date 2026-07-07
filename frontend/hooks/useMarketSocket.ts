@@ -1,74 +1,72 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useMarketStore } from '../stores/marketStore';
 import { CONFIG } from '../constants/config';
 
 const BATCH_INTERVAL_MS = 150;
 
-export function useMarketSocket() {
-  const socketRef = useRef<Socket | null>(null);
+let socket: Socket | null = null;
+let flushIntervalId: ReturnType<typeof setInterval> | null = null;
+let consumerCount = 0;
+const pendingPrices: Record<string, number> = {};
 
-  const updatePrice = useMarketStore((s) => s.updatePrice);
-  const setConnected = useMarketStore((s) => s.setConnected);
+function startMarketSocket() {
+  if (socket || flushIntervalId) return;
 
-  useEffect(() => {
-    if (socketRef.current) return;
+  socket = io(CONFIG.SOCKET_URL, {
+    transports: ['websocket'],
+    reconnection: true,
+    reconnectionDelay: 3000,
+    reconnectionDelayMax: 15000,
+    timeout: 10000,
+  });
 
-    const socket = io(CONFIG.SOCKET_URL, {
-      transports: ['websocket'],
-      reconnection: true,
-      reconnectionDelay: 3000,
-      reconnectionDelayMax: 15000,
-      timeout: 10000,
-    });
-    socketRef.current = socket;
-    const pendingPrices: Record<string, number> = {};
+  const handleConnect = () => useMarketStore.getState().setConnected(true);
+  const handleDisconnect = () => useMarketStore.getState().setConnected(false);
+  const handleConnectError = () => useMarketStore.getState().setConnected(false);
+  const handleReconnect = () => useMarketStore.getState().setConnected(true);
 
-    const handleConnect = () => setConnected(true);
-    const handleDisconnect = () => setConnected(false);
-    const handleConnectError = () => setConnected(false);
-    const handleReconnect = () => setConnected(true);
+  const handlePriceUpdate = (data: { asset: string; price: number }) => {
+    if (!data?.asset || !Number.isFinite(data.price)) return;
+    pendingPrices[data.asset] = data.price;
+  };
 
-    const handlePriceUpdate = (data: { asset: string; price: number }) => {
-      if (!data?.asset || !Number.isFinite(data.price)) return;
-      pendingPrices[data.asset] = data.price;
-    };
+  socket.on('connect', handleConnect);
+  socket.on('disconnect', handleDisconnect);
+  socket.on('connect_error', handleConnectError);
+  socket.io.on('reconnect', handleReconnect);
+  socket.on('global-price-update', handlePriceUpdate);
+  socket.on('price-update', handlePriceUpdate);
 
-    socket.on('connect', handleConnect);
-    socket.on('disconnect', handleDisconnect);
-    socket.on('connect_error', handleConnectError);
-    socket.io.on('reconnect', handleReconnect);
-    socket.on('global-price-update', handlePriceUpdate);
-    socket.on('price-update', handlePriceUpdate);
+  flushIntervalId = setInterval(() => {
+    const symbols = Object.keys(pendingPrices);
 
-    const flushIntervalId = setInterval(() => {
-      const symbols = Object.keys(pendingPrices);
+    if (symbols.length === 0) return;
 
-      if (symbols.length === 0) return;
+    const currentPrices = useMarketStore.getState().prices;
+    const { updatePrice } = useMarketStore.getState();
 
-      const currentPrices = useMarketStore.getState().prices;
-
-      for (const symbol of symbols) {
-        const nextPrice = pendingPrices[symbol];
-        if (currentPrices[symbol]?.price !== nextPrice) {
-          updatePrice(symbol, nextPrice);
-        }
-        delete pendingPrices[symbol];
+    for (const symbol of symbols) {
+      const nextPrice = pendingPrices[symbol];
+      if (currentPrices[symbol]?.price !== nextPrice) {
+        updatePrice(symbol, nextPrice);
       }
-    }, BATCH_INTERVAL_MS);
+      delete pendingPrices[symbol];
+    }
+  }, BATCH_INTERVAL_MS);
+}
+
+export function useMarketSocket() {
+  useEffect(() => {
+    consumerCount += 1;
+    startMarketSocket();
 
     return () => {
-      clearInterval(flushIntervalId);
+      consumerCount = Math.max(0, consumerCount - 1);
 
-      socket.off('connect', handleConnect);
-      socket.off('disconnect', handleDisconnect);
-      socket.off('connect_error', handleConnectError);
-      socket.io.off('reconnect', handleReconnect);
-      socket.off('global-price-update', handlePriceUpdate);
-      socket.off('price-update', handlePriceUpdate);
-
-      socket.disconnect();
-      socketRef.current = null;
+      // Keep the singleton alive for the app lifetime to avoid duplicate
+      // socket/timer churn across mounted tabs.
+      if (consumerCount > 0) return;
     };
   }, []);
 }

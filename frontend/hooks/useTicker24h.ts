@@ -26,19 +26,32 @@ async function fetchTicker24h() {
 }
 
 async function fetchAllSparklines() {
-  const results = await Promise.all(
-    ALL_SYMBOLS.map(async (symbol) => {
-      try {
-        const res = await fetch(
-          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=24`
-        );
-        const data = await res.json();
-        return [symbol, data.map((k: any[]) => parseFloat(k[4]))] as const;
-      } catch {
-        return [symbol, [] as number[]] as const;
-      }
-    })
-  );
+  const chunkSize = 6;
+  const chunkDelayMs = 200;
+  const results: Array<readonly [string, number[]]> = [];
+
+  for (let i = 0; i < ALL_SYMBOLS.length; i += chunkSize) {
+    const chunk = ALL_SYMBOLS.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(
+      chunk.map(async (symbol) => {
+        try {
+          const res = await fetch(
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=24`
+          );
+          const data = await res.json();
+          return [symbol, data.map((k: any[]) => parseFloat(k[4]))] as const;
+        } catch {
+          return [symbol, [] as number[]] as const;
+        }
+      })
+    );
+    results.push(...chunkResults);
+
+    if (i + chunkSize < ALL_SYMBOLS.length) {
+      await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
+    }
+  }
+
   return Object.fromEntries(results);
 }
 

@@ -10,10 +10,13 @@ import Animated, {
   useSharedValue, useAnimatedStyle,
   withTiming, withSequence, withRepeat,
   interpolate, Easing,
+  cancelAnimation,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { useRouter, type Router } from 'expo-router';
+import Svg, { Path, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useTicker24h } from '../../hooks/useTicker24h';
@@ -160,12 +163,18 @@ const styles = StyleSheet.create({
 
 const AmbientField = memo(function AmbientField() {
   const drift = useSharedValue(0);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(drift);
+      return;
+    }
     drift.value = withRepeat(
       withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }),
       -1, true
     );
-  }, []);
+    return () => cancelAnimation(drift);
+  }, [isFocused]);
   const orb1 = useAnimatedStyle(() => ({
     transform: [
       { translateX: interpolate(drift.value, [0, 1], [-12, 16]) },
@@ -206,13 +215,36 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
+function buildSparklinePath(points: number[], width: number, height: number) {
+  if (points.length < 2) return '';
+  const max = Math.max(...points);
+  const min = Math.min(...points);
+  const range = max - min || 1;
+  const step = width / (points.length - 1);
+  return points.reduce((d, point, index) => {
+    const x = index * step;
+    const y = height - ((point - min) / range) * height;
+    return `${d}${index === 0 ? 'M' : 'L'}${x} ${y}`;
+  }, '');
+}
+
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+      return;
+    }
     scale.value = withRepeat(withSequence(withTiming(2.2, { duration: 1100 }), withTiming(1, { duration: 0 })), -1, false);
     opacity.value = withRepeat(withSequence(withTiming(0, { duration: 1100 }), withTiming(0.9, { duration: 0 })), -1, false);
-  }, []);
+    return () => {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+    };
+  }, [isFocused]);
   const ringStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }], opacity: opacity.value }));
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
@@ -238,37 +270,33 @@ const PriceFlash = memo(function PriceFlash({ price, positive }: { price: string
 }, (p, n) => p.price === n.price && p.positive === n.positive);
 
 const Sparkline = memo(function Sparkline({ points, positive }: { points: number[]; positive: boolean }) {
-  const segments = useMemo(() => {
-    if (points.length < 2) return null;
-    const max = Math.max(...points);
-    const min = Math.min(...points);
-    const range = max - min || 1;
-    const h = 34, w = 58;
-    const step = w / (points.length - 1);
-    return points.slice(0, -1).map((p, i) => {
-      const x1 = i * step;
-      const y1 = h - ((p - min) / range) * h;
-      const x2 = (i + 1) * step;
-      const y2 = h - ((points[i + 1] - min) / range) * h;
-      const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-      const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
-      return { x1, y1, length, angle, opacity: 0.4 + (i / points.length) * 0.6 };
-    });
-  }, [points]);
-  if (!segments) return <View style={styles.sparklinePlaceholder} />;
+  const { pathD, gradientId } = useMemo(() => ({
+    pathD: buildSparklinePath(points, 58, 34),
+    gradientId: `sparkline-${Math.random().toString(36).slice(2, 9)}`,
+  }), [points]);
+  if (!pathD) return <View style={styles.sparklinePlaceholder} />;
   const color = positive ? T.gain : T.loss;
   return (
     <View style={{ width: 58, height: 34 }}>
-      {segments.map((s, i) => (
-        <View key={i} style={{
-          position: 'absolute', left: s.x1, top: s.y1,
-          width: s.length, height: 2,
-          backgroundColor: color, borderRadius: 2,
-          opacity: s.opacity,
-          transform: [{ rotate: `${s.angle}deg` }],
-          transformOrigin: '0 0',
-        }} />
-      ))}
+      <Svg width={58} height={34} pointerEvents="none">
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1="0" y1="0" x2={58} y2="0" gradientUnits="userSpaceOnUse">
+            <Stop offset="0%" stopColor={color} stopOpacity={0.4} />
+            <Stop offset="25%" stopColor={color} stopOpacity={0.55} />
+            <Stop offset="50%" stopColor={color} stopOpacity={0.7} />
+            <Stop offset="75%" stopColor={color} stopOpacity={0.85} />
+            <Stop offset="100%" stopColor={color} stopOpacity={1} />
+          </SvgLinearGradient>
+        </Defs>
+        <Path
+          d={pathD}
+          fill="none"
+          stroke={`url(#${gradientId})`}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </Svg>
     </View>
   );
 }, (p, n) => p.points === n.points && p.positive === n.positive);

@@ -9,10 +9,14 @@ import Animated, {
   useSharedValue, useAnimatedStyle,
   withSpring, withTiming, withSequence, withRepeat,
   interpolate, Easing,
+  cancelAnimation,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
+import { useShallow } from 'zustand/react/shallow';
+import Svg, { Path, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { FontFamily } from '../../constants/typography';
 import { useMarketStore } from '../../stores/marketStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -79,13 +83,36 @@ const GlassPanel = memo(function GlassPanel({ style, children, intensity = 28 }:
   return <View style={[style, { backgroundColor: T.glassUp, overflow: 'hidden' }]}>{children}</View>;
 });
 
+function buildSparklinePath(points: number[], width: number, height: number) {
+  if (points.length < 2) return '';
+  const max = Math.max(...points);
+  const min = Math.min(...points);
+  const range = max - min || 1;
+  const step = width / (points.length - 1);
+  return points.reduce((d, point, index) => {
+    const x = index * step;
+    const y = height - ((point - min) / range) * height;
+    return `${d}${index === 0 ? 'M' : 'L'}${x} ${y}`;
+  }, '');
+}
+
 const PulseDot = memo(function PulseDot({ color }: { color: string }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0.9);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+      return;
+    }
     scale.value = withRepeat(withSequence(withTiming(2.2, { duration: 1100 }), withTiming(1, { duration: 0 })), -1, false);
     opacity.value = withRepeat(withSequence(withTiming(0, { duration: 1100 }), withTiming(0.9, { duration: 0 })), -1, false);
-  }, []);
+    return () => {
+      cancelAnimation(scale);
+      cancelAnimation(opacity);
+    };
+  }, [isFocused]);
   const ringStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }], opacity: opacity.value }));
   return (
     <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
@@ -110,49 +137,245 @@ const PriceFlash = memo(function PriceFlash({ price, positive }: { price: string
   );
 }, (p, n) => p.price === n.price && p.positive === n.positive);
 
-const Sparkline = memo(function Sparkline({
+type ChartPoint = { x: number; y: number };
+
+function sampleSpline(values: number[], samplesPerSegment = 10) {
+  if (values.length < 2) return values.map((y, i) => ({ x: i, y }));
+
+  const samples: ChartPoint[] = [];
+  const lastIndex = values.length - 1;
+
+  for (let i = 0; i < lastIndex; i += 1) {
+    const p0 = values[Math.max(0, i - 1)];
+    const p1 = values[i];
+    const p2 = values[i + 1];
+    const p3 = values[Math.min(lastIndex, i + 2)];
+
+    for (let step = 0; step < samplesPerSegment; step += 1) {
+      const t = step / samplesPerSegment;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const y = 0.5 * (
+        (2 * p1)
+        + (-p0 + p2) * t
+        + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+        + (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+      );
+      samples.push({ x: i + t, y });
+    }
+  }
+
+  samples.push({ x: lastIndex, y: values[lastIndex] });
+  return samples;
+}
+
+const PortfolioGraph = memo(function PortfolioGraph({
   points, positive, width: w = 58, height: h = 34,
 }: { points: number[]; positive: boolean; width?: number; height?: number }) {
-  const segments = useMemo(() => {
+  const chart = useMemo(() => {
     if (points.length < 2) return null;
-    const max = Math.max(...points);
+
     const min = Math.min(...points);
+    const max = Math.max(...points);
     const range = max - min || 1;
-    const step = w / (points.length - 1);
-    return points.slice(0, -1).map((p, i) => {
-      const x1 = i * step;
-      const y1 = h - ((p - min) / range) * h;
-      const x2 = (i + 1) * step;
-      const y2 = h - ((points[i + 1] - min) / range) * h;
-      const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-      const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
-      return { x1, y1, length, angle, opacity: 0.4 + (i / points.length) * 0.6 };
+    const padX = 3;
+    const padY = 4;
+    const usableW = Math.max(1, w - padX * 2);
+    const usableH = Math.max(1, h - padY * 2);
+    const samples = sampleSpline(points, 12);
+    const total = Math.max(1, samples.length - 1);
+
+    const normalized = samples.map((p, index) => ({
+      x: padX + (p.x / (points.length - 1)) * usableW,
+      y: padY + (1 - ((p.y - min) / range)) * usableH,
+      value: p.y,
+      index,
+    }));
+
+    const segments = normalized.slice(0, -1).map((p, i) => {
+      const next = normalized[i + 1];
+      const length = Math.sqrt((next.x - p.x) ** 2 + (next.y - p.y) ** 2);
+      const angle = Math.atan2(next.y - p.y, next.x - p.x) * (180 / Math.PI);
+      const progress = i / total;
+      return {
+        x1: p.x,
+        y1: p.y,
+        length,
+        angle,
+        opacity: 0.24 + progress * 0.76,
+      };
     });
+
+    const areaBars = normalized.map((p, i) => {
+      const nextX = i < normalized.length - 1 ? normalized[i + 1].x : w - padX;
+      const barWidth = Math.max(1, nextX - p.x + 0.5);
+      return {
+        x: p.x,
+        y: p.y,
+        height: Math.max(2, h - padY - p.y + 1),
+        width: barWidth,
+        opacity: 0.10 + (i / normalized.length) * 0.12,
+      };
+    });
+
+    return {
+      segments,
+      areaBars,
+      markers: normalized.filter((_, i) => i === 0 || i === normalized.length - 1 || i % 12 === 0),
+      minY: padY + usableH,
+      maxY: padY,
+    };
   }, [points, w, h]);
 
-  if (!segments) return <View style={{ width: w, height: h }} />;
+  if (!chart) return <View style={{ width: w, height: h }} />;
+
   const color = positive ? T.gain : T.loss;
   return (
     <View style={{ width: w, height: h }}>
-      {segments.map((s, i) => (
-        <View key={i} style={{
-          position: 'absolute', left: s.x1, top: s.y1,
-          width: s.length, height: 2,
-          backgroundColor: color, borderRadius: 2,
-          opacity: s.opacity,
-          transform: [{ rotate: `${s.angle}deg` }],
-          transformOrigin: '0 0',
-        }} />
-      ))}
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <View style={[styles.chartGridLine, { top: 6 }]} />
+        <View style={[styles.chartGridLine, { top: h / 2 }]} />
+        <View style={[styles.chartGridLine, { bottom: 6 }]} />
+      </View>
+
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        {chart.areaBars.map((bar, i) => (
+          <View
+            key={`area-${i}`}
+            style={{
+              position: 'absolute',
+              left: bar.x,
+              top: bar.y,
+              width: bar.width,
+              height: bar.height,
+              borderTopLeftRadius: 2,
+              borderTopRightRadius: 2,
+              backgroundColor: color,
+              opacity: bar.opacity,
+            }}
+          />
+        ))}
+      </View>
+
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        {chart.segments.map((s, i) => (
+          <View
+            key={`glow-${i}`}
+            style={{
+              position: 'absolute',
+              left: s.x1,
+              top: s.y1,
+              width: s.length,
+              height: 4,
+              backgroundColor: color,
+              borderRadius: 4,
+              opacity: s.opacity * 0.18,
+              transform: [{ rotate: `${s.angle}deg` }],
+              transformOrigin: '0 0',
+            }}
+          />
+        ))}
+      </View>
+
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        {chart.segments.map((s, i) => (
+          <View
+            key={`line-${i}`}
+            style={{
+              position: 'absolute',
+              left: s.x1,
+              top: s.y1,
+              width: s.length,
+              height: 2,
+              backgroundColor: color,
+              borderRadius: 2,
+              opacity: s.opacity,
+              shadowColor: color,
+              shadowOpacity: 0.35,
+              shadowRadius: 4,
+              shadowOffset: { width: 0, height: 0 },
+              transform: [{ rotate: `${s.angle}deg` }],
+              transformOrigin: '0 0',
+            }}
+          />
+        ))}
+      </View>
+
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        {chart.markers.map((marker, i) => {
+          const isLast = i === chart.markers.length - 1;
+          return (
+            <View
+              key={`marker-${i}`}
+              style={{
+                position: 'absolute',
+                left: marker.x - (isLast ? 3.5 : 2.5),
+                top: marker.y - (isLast ? 3.5 : 2.5),
+                width: isLast ? 7 : 5,
+                height: isLast ? 7 : 5,
+                borderRadius: 10,
+                backgroundColor: isLast ? '#fff' : color,
+                borderWidth: 1.5,
+                borderColor: isLast ? color : 'rgba(255,255,255,0.18)',
+                shadowColor: color,
+                shadowOpacity: 0.85,
+                shadowRadius: 6,
+                shadowOffset: { width: 0, height: 0 },
+              }}
+            />
+          );
+        })}
+      </View>
+    </View>
+  );
+}, (p, n) => p.points === n.points && p.positive === n.positive && p.width === n.width && p.height === n.height);
+
+const MiniSparkline = memo(function MiniSparkline({
+  points, positive, width: w = 58, height: h = 34,
+}: { points: number[]; positive: boolean; width?: number; height?: number }) {
+  const { pathD, gradientId } = useMemo(() => ({
+    pathD: buildSparklinePath(points, w, h),
+    gradientId: `sparkline-${Math.random().toString(36).slice(2, 9)}`,
+  }), [points, w, h]);
+
+  if (!pathD) return <View style={{ width: w, height: h }} />;
+  const color = positive ? T.gain : T.loss;
+  return (
+    <View style={{ width: w, height: h }}>
+      <Svg width={w} height={h} pointerEvents="none">
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1="0" y1="0" x2={w} y2="0" gradientUnits="userSpaceOnUse">
+            <Stop offset="0%" stopColor={color} stopOpacity={0.4} />
+            <Stop offset="25%" stopColor={color} stopOpacity={0.55} />
+            <Stop offset="50%" stopColor={color} stopOpacity={0.7} />
+            <Stop offset="75%" stopColor={color} stopOpacity={0.85} />
+            <Stop offset="100%" stopColor={color} stopOpacity={1} />
+          </SvgLinearGradient>
+        </Defs>
+        <Path
+          d={pathD}
+          fill="none"
+          stroke={`url(#${gradientId})`}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </Svg>
     </View>
   );
 }, (p, n) => p.points === n.points && p.positive === n.positive && p.width === n.width && p.height === n.height);
 
 function AmbientField() {
   const drift = useSharedValue(0);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(drift);
+      return;
+    }
     drift.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, []);
+    return () => cancelAnimation(drift);
+  }, [isFocused]);
   const orb1 = useAnimatedStyle(() => ({
     transform: [{ translateX: interpolate(drift.value, [0, 1], [-14, 16]) }, { translateY: interpolate(drift.value, [0, 1], [-10, 12]) }],
   }));
@@ -188,6 +411,12 @@ function usePortfolioSeries(transactions: FundingTransaction[]) {
     });
 
     const trimmed = points.length > 12 ? points.slice(-12) : points;
+    if (trimmed.length === 1) {
+      // Give the first completed transaction a visible baseline so the
+      // portfolio chart renders immediately after the first deposit.
+      return { points: [0, trimmed[0]], hasData: true };
+    }
+
     return { points: trimmed, hasData: trimmed.length >= 2 };
   }, [transactions]);
 }
@@ -270,7 +499,7 @@ const PortfolioCard = memo(function PortfolioCard({
         <View style={styles.chartCard}>
           <View style={styles.chartRow}>
             {hasSeriesData ? (
-              <Sparkline points={series} positive={seriesPositive} width={width - 108} height={48} />
+              <PortfolioGraph points={series} positive={seriesPositive} width={width - 108} height={72} />
             ) : (
               <View style={styles.chartEmpty}>
                 <Text style={styles.chartEmptyText}>No deposit activity yet — fund your account to see it here</Text>
@@ -365,9 +594,15 @@ const QuickActions = memo(function QuickActions() {
 
 const AIInsightCard = memo(function AIInsightCard() {
   const shimmer = useSharedValue(0);
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      cancelAnimation(shimmer);
+      return;
+    }
     shimmer.value = withRepeat(withTiming(1, { duration: 2400, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, []);
+    return () => cancelAnimation(shimmer);
+  }, [isFocused]);
   const shimmerStyle = useAnimatedStyle(() => ({ opacity: interpolate(shimmer.value, [0, 1], [0.55, 1]) }));
   return (
     <Animated.View entering={FadeInDown.delay(200).springify().damping(16)} style={styles.aiWrap}>
@@ -451,7 +686,7 @@ const AssetRow = memo(function AssetRow({
             <Text style={styles.assetSymbol}>{meta.short}</Text>
             <Text style={styles.assetName}>{meta.name}</Text>
           </View>
-          <Sparkline points={sparkline} positive={positive} />
+          <MiniSparkline points={sparkline} positive={positive} />
           <View style={styles.assetPriceCol}>
             <PriceFlash price={price} positive={positive} />
             <View style={[styles.changeBadge, { backgroundColor: positive ? T.gainDim : T.lossDim }]}>
@@ -473,8 +708,8 @@ export default function Home() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const connected = useMarketStore((s) => s.connected);
-  const prices = useMarketStore((s) => s.prices);
   const ticker24h = useMarketStore((s) => s.ticker24h);
+  const top5Prices = useMarketStore(useShallow((s) => TOP_5.map((symbol) => s.prices[symbol])));
 
   useMarketSocket();
   useTicker24h(TOP_5);
@@ -507,11 +742,9 @@ export default function Home() {
     return 'Good evening';
   }, []);
 
-  const top5Assets = useMemo(() =>
-    TOP_5
-      .map((sym) => prices[sym])
-      .filter(Boolean),
-    [prices]
+  const top5Assets = useMemo(
+    () => top5Prices.filter((asset): asset is NonNullable<(typeof top5Prices)[number]> => Boolean(asset)),
+    [top5Prices]
   );
 
   const renderItem = useCallback(({ item, index }: ListRenderItemInfo<any>) => (
@@ -673,10 +906,17 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: T.hairline,
     paddingVertical: 12, paddingHorizontal: 8, marginBottom: 18,
   },
-  chartRow: { height: 48, alignItems: 'center', justifyContent: 'center' },
+  chartRow: { height: 72, alignItems: 'center', justifyContent: 'center' },
   chartEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
   chartEmptyText: { fontSize: 11, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center' },
   chartCaption: { fontSize: 9.5, fontFamily: FontFamily.body, color: T.textTer, textAlign: 'center', marginTop: 8 },
+  chartGridLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
 
   heroDivider: { height: 1, backgroundColor: T.hairline, marginBottom: 18 },
   statsStrip: { flexDirection: 'row', justifyContent: 'space-between' },
