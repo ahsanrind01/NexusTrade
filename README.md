@@ -23,23 +23,7 @@
 
 ---
 
-## 📋 Table of Contents
-
-- [Overview](#-overview)
-- [Architecture](#-architecture)
-- [Features](#-features)
-- [Tech Stack](#-tech-stack)
-- [Screenshots](#-screenshots)
-- [Getting Started](#-getting-started)
-- [API Reference](#-api-reference)
-- [Roadmap](#-roadmap)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Author](#-author)
-
----
-
-## 🎯 Overview
+## Overview
 
 **NexusTrade** is a full-stack, production-grade cryptocurrency trading platform built with a distributed microservices architecture and a native mobile trading application. It simulates a real-world exchange end-to-end — from user onboarding and wallet funding to order placement, order matching, ledger settlement, and live market data streaming.
 
@@ -63,64 +47,13 @@ Designed as a portfolio project to demonstrate expertise in distributed systems,
 
 NexusTrade follows a **microservices architecture** with an **API Gateway** as the single entry point for all external traffic. Services communicate asynchronously through **Apache Kafka** for event-driven consistency across service boundaries.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              CLIENT LAYER                                    │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                    Mobile App (React Native / Expo)                  │   │
-│  │    • Live Charts  • Portfolio P&L  • Trade Execution  • Wallet Mgmt   │   │
-│  └──────────────────────────────┬─────────────────────────────────────┘   │
-│                                 │ HTTPS / WebSocket                         │
-└─────────────────────────────────┼───────────────────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────────────────┐
-│                           API GATEWAY  :3000                                   │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │   • JWT Authentication & Validation                                      │   │
-│  │   • Request Routing & Load Balancing                                   │   │
-│  │   • Rate Limiting & Request Proxying                                   │   │
-│  └────────────────────────────────────┬────────────────────────────────────┘   │
-└─────────────────────────────────────┼────────────────────────────────────────┘
-                                      │
-        ┌──────────────┬──────────────┼──────────────┬──────────────┐
-        │              │              │              │              │
-   ┌────▼────┐   ┌─────▼─────┐  ┌────▼────┐   ┌────▼────┐   ┌─────▼─────┐
-   │  Auth   │   │   Order   │  │  Wallet │   │ Funding │   │  Market   │
-   │ Service │   │  Service  │  │ Service │   │ Service │   │  Data     │
-   │  :3007  │   │   :3001   │  │  :3004  │   │  :3005  │   │ Service   │
-   └────┬────┘   └─────┬─────┘  └────┬────┘   └────┬────┘   │  :3003    │
-        │              │             │             │        └─────┬─────┘
-        │              │             │             │              │
-        │        ┌─────▼──────┐      │             │              │
-        │        │  Matching  │      │             │              │
-        │        │   Engine   │      │             │              │
-        │        └─────┬──────┘      │             │              │
-        │              │             │             │              │
-        │        ┌─────▼──────┐      │             │              │
-        │        │  Ledger    │◄─────┘             │              │
-        │        │  Service   │                    │              │
-        │        └────────────┘                    │              │
-        │                                          │              │
-        │                    ┌─────────────────────┘              │
-        │                    │                                    │
-        │              ┌─────▼──────┐                             │
-        └─────────────►│   Kafka    │◄────────────────────────────┘
-                       │ Event Bus  │
-                       └─────┬──────┘
-                             │
-                      ┌──────▼──────┐
-                      │  Liquidity  │
-                      │ Bot Service │
-                      └─────────────┘
+<h2 align="center">🏗️ System Architecture</h2>
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         SHARED INFRASTRUCTURE                                │
-│  ┌─────────────────────┐    ┌─────────────────────┐    ┌───────────────┐  │
-│  │   PostgreSQL        │    │       Redis         │    │    Kafka      │  │
-│  │  (Per-service DB)   │    │  (Cache / Pub-Sub)  │    │  (Event Bus)  │  │
-│  └─────────────────────┘    └─────────────────────┘    └───────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+
+<p align="center">
+  <img src="screenshots/architecture.png" alt="NexusTrade Architecture" width="900"/>
+</p>
+
 
 ### Service Registry
 
@@ -137,44 +70,33 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
 | `liquidity-bot-service` | Automated bot accounts placing orders to simulate market liquidity | — | Internal |
 | `shared` | Common Kafka topic bootstrap and gateway-trust middleware | — | Library |
 
-### Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **JWT validated once at the gateway** | Downstream services trust an injected `x-user-id` header instead of re-verifying tokens, reducing latency and eliminating duplicated auth logic. |
-| **Kafka as the event backbone** | Balance updates, order fills, and funding events propagate asynchronously without tight coupling between services, ensuring eventual consistency. |
-| **Redis-first wallet reads** | Wallet balances are served from Redis for low-latency reads, with PostgreSQL/ledger as the durable source of truth. |
-| **Drizzle ORM + PostgreSQL per service** | Each service owns its schema and migrations independently, avoiding a shared monolithic database and enabling independent deployability. |
-| **Shared `trustGateway` middleware** | Copied into each internal service to reject any request that didn't originate from the gateway, enforcing zero-trust at the service boundary. |
-
----
 
 ##  Features
 
 ### Backend
-- ✅ Secure email/password authentication with JWT tokens
-- ✅ Redis-backed wallet balances with PostgreSQL ledger reconciliation
-- ✅ Stripe-integrated fiat funding and withdrawals
-- ✅ Limit order placement, cancellation, and lifecycle tracking
-- ✅ In-memory order book matching engine
-- ✅ Real-time market price streaming via WebSocket (Socket.IO)
-- ✅ Automated liquidity bot for realistic market simulation
-- ✅ Event-driven architecture with Apache Kafka
-- ✅ Gateway-level authentication and request routing
+-  Secure email/password authentication with JWT tokens
+-  Redis-backed wallet balances with PostgreSQL ledger reconciliation
+-  Stripe-integrated fiat funding and withdrawals
+-  Limit order placement, cancellation, and lifecycle tracking
+-  In-memory order book matching engine
+-  Real-time market price streaming via WebSocket (Socket.IO)
+-  Automated liquidity bot for realistic market simulation
+-  Event-driven architecture with Apache Kafka
+-  Gateway-level authentication and request routing
 
 ### Mobile App
-- ✅ Live interactive price charts
-- ✅ Real-time portfolio P&L tracking
-- ✅ Limit order execution interface
-- ✅ Wallet balance and transaction history
-- ✅ Deposit & withdrawal flows with Stripe
-- ✅ User profile and settings management
-- ✅ Onboarding experience
-- ✅ Glassmorphism UI with Expo BlurView
+- Live interactive price charts
+-  Real-time portfolio P&L tracking
+-  Limit order execution interface
+-  Wallet balance and transaction history
+-  Deposit & withdrawal flows with Stripe
+-  User profile and settings management
+-  Onboarding experience
+-  Glassmorphism UI with Expo BlurView
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 ### Backend
 
@@ -319,74 +241,24 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
 
 
 
-## 🚀 Getting Started
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) `18+`
-- [npm](https://www.npmjs.com/)
-- [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
-- [Expo Go](https://expo.dev/go) app or an Android/iOS simulator
-
-### 1. Clone the Repository
+## 🚀 Installation
 
 ```bash
 git clone https://github.com/<your-username>/nexustrade.git
 cd nexustrade
-```
-
-### 2. Start Infrastructure
-
-Spin up PostgreSQL, Redis, and Kafka:
-
-```bash
-cd backend
-docker compose up -d
-```
-
-### 3. Install and Run the Backend
-
-```bash
-cd backend
 npm install
+cp .env.example .env
+docker compose up -d
 npm run dev
 ```
 
-This starts every microservice concurrently (gateway, auth, order, wallet, funding, market-data, matching engine, ledger, and the liquidity bot).
+**Requirements**
 
-> ⚠️ **Note:** Each service has its own `.env` file for database URLs, Kafka brokers, and Stripe keys. Copy `.env.example` (where present) into `.env` per service before starting.
+- Node.js 18+
+- Docker & Docker Compose
+- PostgreSQL
+- Stripe test keys
 
-### 4. Run Database Migrations
-
-Each service with a database manages its own Drizzle migrations:
-
-```bash
-cd backend/services/auth-service
-npm run db:push   
-```
-
-Repeat for `order-service`, `wallet-service`, `funding-service`, and `ledger-service` as needed.
-
-### 5. Install and Run the Mobile App
-
-```bash
-cd frontend
-npm install
-npx expo start
-```
-
-Update `constants/config.ts` with your machine's local IP address so the Expo client can reach the backend:
-
-```typescript
-export const CONFIG = {
-  BASE_URL: 'http://<your-local-ip>:3000/api',
-  SOCKET_URL: 'http://<your-local-ip>:3003',
-};
-```
-
-Scan the QR code with **Expo Go**, or launch an iOS/Android simulator from the Expo CLI.
-
----
 
 ## 📂 Project Structure
 
@@ -422,7 +294,7 @@ NexusTrade/
 
 
 
-## 👤 Author
+##  Author
 
 <div align="center">
 
