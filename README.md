@@ -132,12 +132,12 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
   <table>
     <tr>
       <td align="center" width="33%">
-        <img src="screenshots/login.png" width="220" alt="Login Screen"/>
+        <img src="screenshots/login.PNG" width="220" alt="Login Screen"/>
         <br/>
         <sub><b>Login</b></sub>
       </td>
       <td align="center" width="33%">
-        <img src="screenshots/register.png" width="220" alt="Register Screen"/>
+        <img src="screenshots/register.PNG" width="220" alt="Register Screen"/>
         <br/>
         <sub><b>Register</b></sub>
       </td>
@@ -151,17 +151,17 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
   <table>
     <tr>
       <td align="center" width="33%">
-        <img src="screenshots/dashboard-1.png" width="220" alt="Dashboard"/>
+        <img src="screenshots/dashboard-1.PNG" width="220" alt="Dashboard"/>
         <br/>
         <sub><b>Dashboard</b></sub>
       </td>
       <td align="center" width="33%">
-        <img src="screenshots/dashboard-2.png" width="220" alt="Portfolio Overview"/>
+        <img src="screenshots/dashboard-2.PNG" width="220" alt="Portfolio Overview"/>
         <br/>
         <sub><b>Portfolio Overview</b></sub>
       </td>
       <td align="center" width="33%">
-        <img src="screenshots/market.png" width="220" alt="Market Screen"/>
+        <img src="screenshots/market.PNG" width="220" alt="Market Screen"/>
         <br/>
         <sub><b>Market</b></sub>
       </td>
@@ -175,17 +175,17 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
   <table>
     <tr>
       <td align="center" width="33%">
-        <img src="screenshots/crypto-graph.png" width="220" alt="Crypto Chart"/>
+        <img src="screenshots/crypto-graph.PNG" width="220" alt="Crypto Chart"/>
         <br/>
         <sub><b>Crypto Chart</b></sub>
       </td>
       <td align="center" width="33%">
-        <img src="screenshots/trade.png" width="220" alt="Trade Screen"/>
+        <img src="screenshots/trade.PNG" width="220" alt="Trade Screen"/>
         <br/>
         <sub><b>Trade Execution</b></sub>
       </td>
       <td align="center" width="33%">
-        <img src="screenshots/orderbook.png" width="220" alt="Placeholder"/>
+        <img src="screenshots/orderbook.PNG" width="220" alt="Placeholder"/>
         <br/>
         <sub><b>Order History</b></sub>
       </td>
@@ -199,17 +199,17 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
   <table>
     <tr>
       <td align="center" width="33%">
-        <img src="screenshots/wallet-1.png" width="220" alt="Wallet Screen"/>
+        <img src="screenshots/wallet-1.PNG" width="220" alt="Wallet Screen"/>
         <br/>
         <sub><b>Wallet</b></sub>
       </td>
       <td align="center" width="33%">
-        <img src="screenshots/wallet-2.png" width="220" alt="Deposit / Withdraw"/>
+        <img src="screenshots/wallet-2.PNG" width="220" alt="Deposit / Withdraw"/>
         <br/>
         <sub><b>Deposit / Withdraw</b></sub>
       </td>
       <td align="center" width="33%">
-        <img src="screenshots/profile-1.png" width="220" alt="Profile Screen"/>
+        <img src="screenshots/profile-1.PNG" width="220" alt="Profile Screen"/>
         <br/>
         <sub><b>Profile</b></sub>
       </td>
