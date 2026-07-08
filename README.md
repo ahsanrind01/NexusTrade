@@ -149,7 +149,7 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
 
 ---
 
-## ✨ Features
+##  Features
 
 ### Backend
 - ✅ Secure email/password authentication with JWT tokens
@@ -205,7 +205,7 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
 
 ---
 
-## 📸 Screenshots
+## Screenshots
 
 ### Authentication
 
@@ -221,11 +221,6 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
         <img src="screenshots/register.png" width="220" alt="Register Screen"/>
         <br/>
         <sub><b>Register</b></sub>
-      </td>
-      <td align="center" width="33%">
-        <img src="screenshots/onboarding.png" width="220" alt="Onboarding Screen"/>
-        <br/>
-        <sub><b>Onboarding</b></sub>
       </td>
     </tr>
   </table>
@@ -271,8 +266,7 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
         <sub><b>Trade Execution</b></sub>
       </td>
       <td align="center" width="33%">
-        <!-- Add more screenshots here -->
-        <img src="screenshots/placeholder.png" width="220" alt="Placeholder"/>
+        <img src="screenshots/orderbook.png" width="220" alt="Placeholder"/>
         <br/>
         <sub><b>Order History</b></sub>
       </td>
@@ -323,9 +317,7 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
   </table>
 </p>
 
-> 💡 **Tip:** Screenshots live in the [`screenshots/`](./screenshots) folder. Replace `placeholder.png` with your actual images as the UI evolves.
 
----
 
 ## 🚀 Getting Started
 
@@ -370,7 +362,7 @@ Each service with a database manages its own Drizzle migrations:
 
 ```bash
 cd backend/services/auth-service
-npm run db:push   # or the service's equivalent Drizzle script
+npm run db:push   
 ```
 
 Repeat for `order-service`, `wallet-service`, `funding-service`, and `ledger-service` as needed.
@@ -393,47 +385,6 @@ export const CONFIG = {
 ```
 
 Scan the QR code with **Expo Go**, or launch an iOS/Android simulator from the Expo CLI.
-
----
-
-## 📡 API Reference
-
-### Authentication
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/auth/register` | Register a new user |
-| `POST` | `/api/auth/login` | Authenticate and receive JWT |
-| `POST` | `/api/auth/logout` | Invalidate session |
-
-### Orders
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/orders` | Place a limit order |
-| `DELETE` | `/api/orders/:id` | Cancel an order |
-| `GET` | `/api/orders` | List user orders |
-
-### Wallet
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/wallet/balance` | Get wallet balances |
-| `GET` | `/api/wallet/transactions` | Get transaction history |
-
-### Funding
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/funding/deposit` | Initiate Stripe deposit |
-| `POST` | `/api/funding/withdraw` | Initiate withdrawal |
-
-### Market Data
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `WS` | `/socket.io` | Subscribe to live price feeds |
-| `GET` | `/api/market/ticker` | Get current market prices |
 
 ---
 
@@ -469,43 +420,19 @@ NexusTrade/
 
 ---
 
-## 🗺️ Roadmap
 
-- [ ] **Notification Service** — Email & push notification integration into the mobile client
-- [ ] **Order History & Analytics** — Dedicated screens for trade analytics and order history
-- [ ] **Two-Factor Authentication** — TOTP-based 2FA for enhanced security
-- [ ] **CI/CD Pipeline** — Containerized deployment and automated testing for all services
-- [ ] **Test Coverage** — Unit and integration tests across all microservices
-- [ ] **Dark Mode** — System-aware dark mode for the mobile client
-- [ ] **Multi-Currency Support** — Support for additional fiat currencies beyond USD
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! If you'd like to contribute to NexusTrade, please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-Please ensure your code follows the existing style guidelines and includes appropriate tests.
-
----
 
 ## 👤 Author
 
 <div align="center">
 
-  <b>Built by Ahsan</b>
+  <b>Built by Ehsan ul haq</b>
   <br/>
   BSE Student | Backend & Mobile Developer
   <br/><br/>
 
   <a href="https://github.com/ahsan"><img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"/></a>
-  <a href="https://linkedin.com/in/ahsan"><img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn"/></a>
+  <a href="www.linkedin.com/in/ehsan-ul-haq-rind"><img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn"/></a>
 
 </div>
 
