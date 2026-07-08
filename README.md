@@ -217,25 +217,6 @@ NexusTrade follows a **microservices architecture** with an **API Gateway** as t
         <sub><b>Profile</b></sub>
       </td>
     </tr>
-    <tr>
-      <td align="center" width="33%">
-        <img src="screenshots/profile-2.png" width="220" alt="Settings Screen"/>
-        <br/>
-        <sub><b>Settings</b></sub>
-      </td>
-      <td align="center" width="33%">
-        <!-- Add more screenshots here -->
-        <img src="screenshots/placeholder.png" width="220" alt="Placeholder"/>
-        <br/>
-        <sub><b>Notifications</b></sub>
-      </td>
-      <td align="center" width="33%">
-        <!-- Add more screenshots here -->
-        <img src="screenshots/placeholder.png" width="220" alt="Placeholder"/>
-        <br/>
-        <sub><b>Analytics</b></sub>
-      </td>
-    </tr>
   </table>
 </p>
 
