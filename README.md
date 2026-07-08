@@ -16,9 +16,6 @@
 
   <br/><br/>
 
-  <img src="https://img.shields.io/github/stars/ahsan/nexustrade?style=social" alt="Stars"/>
-  <img src="https://img.shields.io/github/forks/ahsan/nexustrade?style=social" alt="Forks"/>
-
 </div>
 
 ---
